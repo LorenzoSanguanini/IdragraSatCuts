@@ -181,3 +181,5 @@ demo/simout/2000_yield_pot_1.asc
 demo/simout/2000_yield_pot_2.asc
 demo/simout/IC_thetaI.asc
 demo/simout/IC_thetaII.asc
+
+src/*.bak_*
