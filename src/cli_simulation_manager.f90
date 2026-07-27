@@ -328,14 +328,13 @@ module cli_simulation_manager!
         ! satellite cuts only: the cells left to the GDD calendar received no halt at all
         ! and were irrigated more than their neighbours for a reason that has nothing to do
         ! with agronomy. The file is still honoured, as an additional explicit override.
-        use_irr_halt = (pars%sim%irr_halt_days > 0)
-        ! allocated in any case so that it can always be passed: when irr_halt_days is 0 the
+        ! Il valore vero viene deciso dentro il ciclo annuale, quando si sa quanti giorni
+        ! chiede ogni coltura: qui si parte spenti.
+        use_irr_halt = .false.
+        ! allocated in any case so that it can always be passed: when the halt is off the
         ! routine leaves it all .false. and nothing changes
         allocate(irr_halt_mask(info_spat%domain%header%imax, info_spat%domain%header%jmax))
         irr_halt_mask = .false.
-        if (use_irr_halt) then
-            print *, 'Irrigation halt around cuts: +/-', pars%sim%irr_halt_days, ' days.'
-        end if
         !!
         ! Yearly simulation cycle
         year_cycle: do y=1,sim_years!
@@ -524,6 +523,21 @@ module cli_simulation_manager!
 
             ! Read all phenological tables and allocation of info_pheno%prm%tab(:,:)!
             call read_all_crop_pars(pars%sim%year_step(y),pars%sim%n_lus,info_pheno,pars)!
+            ! IRRIGATION HALT: giorni di sospensione per coltura. Va letto QUI, prima della
+            ! scansione della serie di riferimento, perche' e' quello che decide se la
+            ! sospensione serve. Il file irr_halt_days.txt basta da solo ad accendere la
+            ! funzione: IRR_HALT_DAYS in idragra_parameters.txt e' solo il valore di riserva
+            ! per quando il file manca. Chiedere DUE cose per accenderne una era un invito a
+            ! sbagliare, tanto piu' che il plugin scrive il file ma non il parametro.
+            if (allocated(halt_by_crop)) deallocate(halt_by_crop)
+            allocate(halt_by_crop(max(size(info_pheno(1)%k_cb%tab,2),1)))
+            call open_irr_halt_days(trim(pars%sim%input_path)//'irr_halt_days.txt', &
+                & halt_by_crop, pars%sim%irr_halt_days, debug)
+            use_irr_halt = (maxval(halt_by_crop) > 0)
+            if (use_irr_halt .and. y == 1) then
+                print *, 'Irrigation halt around cuts enabled for ', &
+                    & count(halt_by_crop > 0), ' crop(s).'
+            end if
             ! FORCED CUTS: locate one regrowth cycle in the reference series (per station and crop)
             ! and clear the per-cell memory of the cuts of the previous year.
             ! the scan of the reference series is needed by the forced cuts (to replay the
@@ -543,12 +557,6 @@ module cli_simulation_manager!
                 allocate(pheno_n_cut(1,1))
                 pheno_n_cut = 0
             end if
-            ! days of halt per crop: irr_halt_days from idragra_parameters.txt is the value
-            ! used for every crop, irr_halt_days.txt (optional) overrides it crop by crop
-            if (allocated(halt_by_crop)) deallocate(halt_by_crop)
-            allocate(halt_by_crop(max(size(info_pheno(1)%k_cb%tab,2),1)))
-            call open_irr_halt_days(trim(pars%sim%input_path)//'irr_halt_days.txt', &
-                & halt_by_crop, pars%sim%irr_halt_days, debug)
             if (use_forced_cuts) then
                 fc_last_cut = 0
                 ! first imposed cut of the current year, per cell: before that day the
