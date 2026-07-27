@@ -114,7 +114,7 @@ module mod_crop_phenology
         type(grid_i),intent(in)::domain!
         integer,dimension(:,:),intent(in)::soiluse!
         type(crop_pheno_info),dimension(:),intent(in)::info_pheno!
-        type(crop_matrices),intent(inout)::crop_mat
+        type(crop_matrices),intent(out)::crop_mat
         integer,dimension(:,:),intent(in)::irandom
         integer,intent(in)::year_length
         
@@ -209,8 +209,95 @@ module mod_crop_phenology
 
     end subroutine populate_crop_yield_matrices
 
+    subroutine compute_regrow_window(info_pheno, regrow_start, regrow_end, season_end)
+        ! FORCED CUTS support.
+        ! For every (weather station, crop) pair, locate in the REFERENCE phenological
+        ! series one complete regrowth cycle, i.e. the interval that goes from a cut
+        ! (Kcb back to its minimum) up to the day before the following cut.
+        ! That window is later used to replay the original regrowth shape starting
+        ! from an externally imposed cut date, so the curve computed by cropcoef is
+        ! preserved and only re-anchored in time.
+        implicit none
+        type(crop_pheno_info),dimension(:),intent(in)::info_pheno
+        integer,dimension(:,:),allocatable,intent(out)::regrow_start, regrow_end
+        ! season_end: last day of active growth in the reference series. After that day the
+        ! cell must go back to the ORIGINAL curve, so that autumn senescence and winter
+        ! dormancy are the real ones and the crop does not stay green until December.
+        integer,dimension(:,:),allocatable,intent(out)::season_end
+        integer::n_ws, n_crop, n_days, i, c, d, d_start, d_end, cut1, cut2
+        real(dp)::peak, base, thr, tol
+
+        n_ws   = size(info_pheno)
+        n_days = size(info_pheno(1)%k_cb%tab,1)
+        n_crop = size(info_pheno(1)%k_cb%tab,2)
+        allocate(regrow_start(n_ws,n_crop))
+        allocate(regrow_end(n_ws,n_crop))
+        allocate(season_end(n_ws,n_crop))
+        regrow_start = 0
+        regrow_end   = 0
+        season_end   = 0
+        tol = 1.0d-6
+
+        do i=1,n_ws
+            do c=1,n_crop
+                ! ---- growing season: Kcb is zero during winter dormancy ----
+                d_start = 0
+                do d=1,n_days
+                    if (info_pheno(i)%k_cb%tab(d,c) > tol) then
+                        d_start = d
+                        exit
+                    end if
+                end do
+                if (d_start == 0) cycle          ! no crop at all on this land use
+
+                d_end = 0
+                do d=n_days,1,-1
+                    if (info_pheno(i)%k_cb%tab(d,c) > tol) then
+                        d_end = d
+                        exit
+                    end if
+                end do
+                season_end(i,c) = d_end
+
+                ! ---- cuts are SHARP DROPS inside the season, NOT returns to zero ----
+                ! Between two cuts Kcb falls back to its "cut" level (e.g. 0.30 for alfalfa),
+                ! while zero only means winter dormancy. Looking for the absolute minimum
+                ! would therefore find the end of the season instead of the first cut.
+                peak = maxval(info_pheno(i)%k_cb%tab(d_start:d_end,c))
+                base = minval(info_pheno(i)%k_cb%tab(d_start:d_end,c), &
+                    & mask=info_pheno(i)%k_cb%tab(d_start:d_end,c) > tol)
+                thr = 0.2d0 * (peak - base)
+                if (thr <= tol) cycle             ! flat curve: no cut to replay
+
+                cut1 = 0
+                cut2 = 0
+                do d=d_start+1,d_end
+                    if (info_pheno(i)%k_cb%tab(d-1,c) - info_pheno(i)%k_cb%tab(d,c) > thr) then
+                        if (cut1 == 0) then
+                            cut1 = d
+                        else
+                            cut2 = d
+                            exit
+                        end if
+                    end if
+                end do
+                if (cut1 == 0) cycle              ! crop without cuts: leave it to the standard engine
+
+                regrow_start(i,c) = cut1          ! day of the cut: Kcb is at its post-cut level
+                if (cut2 > 0) then
+                    regrow_end(i,c) = cut2 - 1    ! regrowth ends the day before the next cut
+                else
+                    regrow_end(i,c) = d_end
+                end if
+            end do
+        end do
+
+    end subroutine compute_regrow_window
+
     subroutine populate_crop_pars_matrices(crop_pars_mat,info_pheno,irandom,doy,ws_idx,&
-                                           & domain,soil_use,y, year_length, crop_mat)!
+                                           & domain,soil_use,y, year_length, crop_mat, &
+                                           & fc_last_cut, fc_regrow_start, fc_regrow_end, fc_season_end, &
+                                           & fc_first_cut)!
         ! populate crop parameters matrices from weather stations time series
         integer,intent(in)::doy,year_length,y!
         type(grid_i),intent(in)::domain,soil_use!
@@ -218,11 +305,32 @@ module mod_crop_phenology
         type(crop_pheno_info),dimension(:),intent(in)::info_pheno
         type(crop_pars_matrices),intent(inout)::crop_pars_mat
         integer,dimension(:,:),intent(inout)::irandom               ! pseudorandom parameter that shifts crop cycle
-        type(crop_matrices),intent(inout)::crop_mat
+        type(crop_matrices),intent(in)::crop_mat
+        ! ---- FORCED CUTS (optional): externally imposed harvest dates per cell ----
+        ! fc_last_cut(i,j)   : doy of the most recent forced cut for that cell (0 = none yet this year)
+        ! fc_regrow_start/end: for each (weather station, crop), the window in the reference
+        !                      phenological series describing one regrowth cycle.
+        ! When a cell has had a forced cut, the phenological pointer (doy_s) is re-anchored to
+        ! the start of the reference regrowth, so the ORIGINAL curve shape (from cropcoef) is
+        ! preserved but restarted on the imposed date. All arguments are optional: when absent
+        ! the routine behaves exactly like the standard version.
+        integer,dimension(:,:),intent(in),optional::fc_last_cut
+        integer,dimension(:,:),intent(in),optional::fc_regrow_start
+        integer,dimension(:,:),intent(in),optional::fc_regrow_end
+        integer,dimension(:,:),intent(in),optional::fc_season_end
+        ! fc_first_cut(i,j): doy of the FIRST imposed cut of the year for that cell (0 = none).
+        ! Needed to prevent the GDD calendar from firing its own cut before the satellite one.
+        integer,dimension(:,:),intent(in),optional::fc_first_cut
 
-        integer::i,j    
-        integer::doy_s ! shifted day of the year 
-        
+        integer::i,j
+        integer::doy_s ! shifted day of the year
+        integer::doy_std ! standard (not re-anchored) pointer, kept for the end of season
+        logical::use_forced_cuts
+        integer::rs, re, se
+
+        use_forced_cuts = present(fc_last_cut) .and. present(fc_regrow_start) &
+            & .and. present(fc_regrow_end) .and. present(fc_season_end) .and. present(fc_first_cut)
+
         do j=1,size(domain%mat,2)!
             do i=1,size(domain%mat,1)!
                 scans_domain: if(domain%mat(i,j) /= domain%header%nan)then!
@@ -263,14 +371,46 @@ module mod_crop_phenology
                     ! %EAC% fix back shifting
                     ! if the second crop, then check if new doy overlap the series of the previous crop
                     ! if so, delete the overlap
-                    if (crop_pars_mat%n_crop_in_year(i,j) >= 2) then !
-                        if (doy_s < crop_mat%iie(i,j,crop_pars_mat%n_crop_in_year(i,j)-1)) then ! compare with the previous crop
+                    if (crop_pars_mat%n_crop_in_year(i,j) == 2) then !
+                        if (doy_s < crop_mat%iie(i,j,1)) then ! compare with the first crop
                                 doy_s = doy
                         end if
                     end if
                     
+                    ! ---- FORCED CUTS: re-anchor the phenological pointer ----------------
+                    ! If this cell has already received an externally imposed cut this year,
+                    ! the pointer is moved to the beginning of the reference regrowth cycle
+                    ! and advances one day per day. The shape of the curve is therefore the
+                    ! original one computed by cropcoef, only restarted on the imposed date.
+                    ! Before the first forced cut of the year the standard pointer is kept,
+                    ! so spring green-up is left untouched.
+                    if (use_forced_cuts) then
+                        rs = fc_regrow_start(ws_idx(i,j), soil_use%mat(i,j))
+                        re = fc_regrow_end(ws_idx(i,j), soil_use%mat(i,j))
+                        se = fc_season_end(ws_idx(i,j), soil_use%mat(i,j))
+                        doy_std = doy_s                     ! standard pointer, kept as reference
+                        if (rs > 0 .and. re >= rs .and. doy_std <= se) then
+                            if (fc_last_cut(i,j) > 0) then
+                                ! (a) after an imposed cut: replay the reference regrowth from it
+                                doy_s = rs + (doy - fc_last_cut(i,j))
+                                ! hold on the mature plateau if the next cut is late: the crop
+                                ! must not run into the next cut of the reference series
+                                if (doy_s > re) doy_s = re
+                                if (doy_s < 1) doy_s = 1
+                                if (doy_s > year_length) doy_s = year_length
+                            else if (fc_first_cut(i,j) > 0) then
+                                ! (b) BEFORE the first imposed cut of the year: spring green-up is
+                                ! left untouched, but the pointer is not allowed to reach the cut
+                                ! of the reference curve. Without this the GDD calendar would fire
+                                ! a spurious cut of its own before the satellite one.
+                                if (rs > 1 .and. doy_s > rs - 1) doy_s = rs - 1
+                            end if
+                        end if
+                    end if
+                    ! ---------------------------------------------------------------------
+
                     ! TODO: parameters overloading can be moved to a specific subroutine
-                    
+
                     ! conveniently updates phenological data from its series - update occurs only if Kcb varies
                     crop_pars_mat%k_cb(i,j)=info_pheno(ws_idx(i,j))%k_cb%tab(doy_s,soil_use%mat(i,j))
                     
@@ -342,28 +482,11 @@ module mod_crop_phenology
         type(crop_pars_matrices),intent(inout)::crop_par_mat
         
         ! populate pheno%RF_t & pheno%RF_e
-        where (domain%mat /= domain%header%nan .and. &
-               crop_par_mat%d_t_max > 0.0D0 .and. &
-               crop_par_mat%RF_t_max >= 0.0D0 .and. crop_par_mat%RF_t_max <= 1.0D0)
-            crop_par_mat%RF_t = d_t/crop_par_mat%d_t_max
-            where (crop_par_mat%RF_t_max*crop_par_mat%RF_t + &
-                   (1.0D0-crop_par_mat%RF_t_max) > tiny(1.0D0))
-                crop_par_mat%RF_t = crop_par_mat%RF_t_max*crop_par_mat%RF_t / &
-                    (crop_par_mat%RF_t_max*crop_par_mat%RF_t + (1.0D0-crop_par_mat%RF_t_max))
-            elsewhere
-                crop_par_mat%RF_t = 0.0D0
-            end where
-        elsewhere
-            crop_par_mat%RF_t = 0.0D0
-        end where
-
+        crop_par_mat%RF_t = merge(crop_par_mat%RF_t_max * (d_t/crop_par_mat%d_t_max)*&
+                                 (1.0D0 / (crop_par_mat%RF_t_max*(d_t/crop_par_mat%d_t_max)+(1.0D0-crop_par_mat%RF_t_max))), &
+                                  crop_par_mat%RF_t, crop_par_mat%RF_t_max /= domain%header%nan)
         crop_par_mat%RF_t = round_2darray(crop_par_mat%RF_t,6)
-        crop_par_mat%RF_e = 1.0D0-crop_par_mat%RF_t
-
-        where (domain%mat == domain%header%nan)
-            crop_par_mat%RF_t = dble(domain%header%nan)
-            crop_par_mat%RF_e = dble(domain%header%nan)
-        end where
+        crop_par_mat%RF_e = merge(1-  crop_par_mat%RF_t, crop_par_mat%RF_e, crop_par_mat%RF_t_max /= domain%header%nan)
 
     end subroutine calculate_RF_t!
     

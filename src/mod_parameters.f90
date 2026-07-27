@@ -104,73 +104,6 @@ module mod_parameters!
         type(date) :: end_simulation                ! end simulation date
         integer :: forecast_day = 5                 ! number of days to use to cumulate precipitation
         real(dp) :: h_maxpond = 0.0D0               ! overall maximum pond (mm). It will replaced by irrigation method
-        real(dp) :: fc_ratio = 1.0D0                ! fraction of FC to fill with irrigation
-
-        ! set print to file options (default is 'y' = yes)
-        character :: prt_stp_rain='y'
-        character :: prt_stp_transp_act='y'
-        character :: prt_stp_transp_pot='y'
-        character :: prt_stp_irr='y'
-        character :: prt_stp_irr_loss='y'
-        character :: prt_stp_cap_rise='y'
-        character :: prt_stp_irr_nm_priv='y'
-        character :: prt_stp_irr_nm_col='y'
-        character :: prt_stp_deep_perc='y'
-        character :: prt_stp_runoff='y'
-        character :: prt_stp_et_pot='y'
-        character :: prt_stp_et_act='y'
-        character :: prt_dbg_eva_act='y'
-        character :: prt_dbg_eff_rain='y'
-        character :: prt_dbg_perc1='y'
-        character :: prt_dbg_perc2='y'
-        character :: prt_dbg_h_soil1='y'
-        character :: prt_dbg_h_soil2='y'
-        character :: prt_yr_rain='y'
-        character :: prt_yr_rain_crop_season='y'
-        character :: prt_yr_irr='y'
-        character :: prt_yr_irr_loss='y'
-        character :: prt_yr_eva_act_crop_season='y'
-        character :: prt_yr_eva_pot_crop_season='y'
-        character :: prt_yr_transp_act='y'
-        character :: prt_yr_transp_pot='y'
-        character :: prt_yr_runoff='y'
-        character :: prt_yr_net_flux_gw='y'
-        character :: prt_yr_total_eff='y'
-        character :: prt_yr_n_irr_events='y'
-        character :: prt_yr_h_irr_mean='y'
-        character :: prt_yr_biomass_pot='y'
-        character :: prt_yr_yield_pot='y'
-        character :: prt_yr_yield_act='y'
-        character :: prt_yr_T_act_sum='y'
-        character :: prt_yr_T_pot_sum='y'
-        character :: prt_yr_f_WS_stage='y'
-        character :: prt_yr_f_WS='y'
-        character :: prt_yr_f_HS='y'
-        character :: prt_yr_f_HS_sum='y'
-        character :: prt_yr_dbg_eva_act_tot='y'
-        character :: prt_yr_dbg_rain_eff='y'
-        character :: prt_yr_dbg_iter1='y'
-        character :: prt_yr_dbg_iter2='y'
-
-        character :: prt_all = 'y'
-        character :: prt_step = 'y'
-        character :: prt_annual = 'y'
-        character :: prt_yield = 'y'
-        character :: prt_debug = 'y'
-        character :: prt_cell_all = 'y'
-
-        ! set options for cell outputs
-        character :: prt_cell_convergence = 'y'
-        character :: prt_cell_evaporation = 'y'
-        character :: prt_cell_runoff = 'y'
-        character :: prt_cell_et0 = 'y'
-
-        ! set other print options
-        character :: prt_debug_out = 'y'
-
-        character :: prt_init_cond = 'y'
-
-
     end type simulation!
 
     type layer_depth!
@@ -319,5 +252,24 @@ module mod_parameters!
         integer::doy                       ! day of the year [1-->365/6]
         real(dp)::h_irr                    ! water depth in each irrigation
     end type
-    
+
+    type irrigation_blackout
+        integer::row                       ! grid row index (1-based, same convention as .asc rasters)
+        integer::col                       ! grid col index (1-based, same convention as .asc rasters)
+        integer::year                      ! calendar year
+        integer::doy_start                 ! first day of year (inclusive) with irrigation suppressed
+        integer::doy_end                   ! last day of year (inclusive) with irrigation suppressed
+    end type
+
+    type forced_cut
+        ! Externally imposed harvest (cut) date for a single cell.
+        ! Used to drive alfalfa cuts from satellite-detected dates instead of
+        ! the offline GDD calendar. Optional: if the file is absent, the model
+        ! behaves exactly as the standard version.
+        integer::row                       ! grid row index (1-based, same convention as .asc rasters)
+        integer::col                       ! grid col index (1-based, same convention as .asc rasters)
+        integer::year                      ! calendar year
+        integer::doy                       ! day of year of the cut
+    end type
+
 end module mod_parameters!

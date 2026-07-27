@@ -300,9 +300,6 @@ module mod_grid!
         integer :: i, ios, free_unit!
         ErrorFlag = 0!
         ios=0!
-
-        ! exit if filename is empty
-        if (trim(filename) == '') return
         
         call seek_un( ErrorFlag, free_unit) !Look for a free unit!
         open( unit=free_unit, file=trim(filename), action="write", iostat=ios )!
@@ -322,7 +319,6 @@ module mod_grid!
             write(free_unit, *) grid%mat(i,:)!
         end do!
         close(free_unit)!
-        print*,"print file: ", trim(trim(filename))!
         !!
     end subroutine write_grid_r!
     !
@@ -336,9 +332,6 @@ module mod_grid!
         integer :: i, ios, free_unit!
         ErrorFlag = 0!
         ios=0!
-        
-        ! exit if filename is empty
-        if (trim(filename) == '') return
         
         call seek_un( ErrorFlag, free_unit) !Look for a free unit!
         open( unit=free_unit, file=trim(filename), action="write", iostat=ios )!
@@ -356,8 +349,6 @@ module mod_grid!
             write(free_unit,*) grid%mat(i,:)!
         end do!
         close(free_unit)!
-        print*,"print file: ", trim(trim(filename))!
-                
         !
     end subroutine write_grid_i!
 

@@ -69,6 +69,7 @@ module mod_irrigation
         
     end subroutine calc_perc_booster_pars!
 
+
     subroutine update_adj_perco_parameters(info_spat, matrice_irr, day_from_irr, adj_perc_par)
         ! calculate adjustment parameter of the percolation model (eq 1.44)!
         ! from the last irrigation event
@@ -107,8 +108,9 @@ module mod_irrigation
 
     end subroutine
 
-    subroutine irrigation_need_fixed(info_spat, h_irr, bil2, bil2_old, bil1_old, pheno, &!
-        & eff_rain, xrice_ksat, h_sat2, day_from_irr, adj_perc_par)!
+
+    subroutine irrigation_need_fix(info_spat, h_irr, bil2, bil2_old, bil1_old, pheno, &!
+        & eff_rain, xrice_ksat, day_from_irr, adj_perc_par)!
         ! calculate irrigation needs at field capacity and fixed volume (defined by irrigation methods)
         implicit none!
         real(dp),dimension(:,:,:),intent(out)::h_irr
@@ -120,7 +122,6 @@ module mod_irrigation
         real(dp),dimension(:,:,:),intent(inout)::adj_perc_par ! parameter that adjust percolation
         real(dp),dimension(:,:),intent(in)::eff_rain
         real(dp),intent(in)::xrice_ksat     ! ksat of the transpirative layer for rice
-        real(dp),dimension(:,:),intent(in)::h_sat2
         real(dp),dimension(size(info_spat%domain%mat,1),size(info_spat%domain%mat,2))::h_irr_temp!
         integer::i,j!
         ! init
@@ -135,14 +136,13 @@ module mod_irrigation
                 ! %CG% add water to fill soil, ponding and ET
                 h_irr_temp = ((info_spat%h_meth%mat-  bil1_old%h_pond)+ & ! fill the ponding layer
                                 (info_spat%theta(1)%sat%mat*bil1_old%d_e*1000-bil1_old%h_soil)+ &!
-                                (h_sat2-bil2_old%h_soil) + & ! fill the soil layer to saturation
+                                (info_spat%theta(2)%sat%mat*bil2%d_t*1000-bil2_old%h_soil) + & ! fill the soil layer to saturation
                                 (bil1_old%h_eva + bil2_old%h_transp_pot))/ & ! fill ET
                                 1.0 ! don't consider efficiency
             ! TODO: %EAC%: small edit to manage submerged condition
-            ! TODO: temporary implementation for rice paddy
             else where ((info_spat%h_maxpond%mat>10.0D0) .and. (bil1_old%h_pond<(0.9*info_spat%h_maxpond%mat))) ! crop submerged, only if h_maxpond> 10 mm
                 h_irr_temp = info_spat%h_meth%mat
-            else where ((bil1_old%h_soil + bil2_old%h_soil) < bil2%h_raw_sup) ! all other crops
+            else where ((bil1_old%h_soil*pheno%RF_e + bil2_old%h_soil*pheno%RF_t) < bil2%h_raw_sup) ! all other crops
                 ! TODO: %AB% why only 2nd layer RAWbig?
                 ! else where (bil2_old%tmm<bil2%RAWbig)
                 h_irr_temp = info_spat%h_meth%mat
@@ -156,11 +156,13 @@ module mod_irrigation
         forall(i=1:size(info_spat%domain%mat,1),j=1:size(info_spat%domain%mat,2),&!
             & info_spat%irr_meth_id%mat(i,j)/=info_spat%irr_meth_id%header%nan) &!
             & h_irr(i,j,info_spat%irr_meth_id%mat(i,j)) = h_irr_temp(i,j)!
-
-    end subroutine irrigation_need_fixed!
+        
+        !call update_adj_perco_parameters(info_spat, h_irr_temp, day_from_irr, adj_perc_par)
+        
+    end subroutine irrigation_need_fix!
 
     subroutine irrigation_need_fc(info_spat,h_irr,bil2,bil2_old,bil1_old,pheno,&!
-        & eff_rain,xrice_ksat,day_from_irr,adj_perc_par, fc_ratio)!
+        & eff_rain,xrice_ksat,day_from_irr,adj_perc_par)!
         ! calculate irrigation needs at field capacity
         implicit none!
         real(dp),dimension(:,:,:),intent(out)::h_irr!
@@ -174,7 +176,7 @@ module mod_irrigation
         integer::i,j
         real(dp),intent(in)::xrice_ksat     ! ksat of the transpirative layer for rice
         real(dp),dimension(size(info_spat%domain%mat,1),size(info_spat%domain%mat,2))::h_irr_temp!
-        real(dp),intent(in)::fc_ratio ! fraction of FC to use as target
+        
         ! init
         h_irr = 0.
         h_irr_temp = 0.
@@ -191,20 +193,16 @@ module mod_irrigation
                 !             (info_spat%eff_met%mat) ! consider also efficiency
 
 !~             else where (bil2_old%tmm<bil2%RAWbig)       !all other crops
-            else where ((bil1_old%h_soil + bil2_old%h_soil) < bil2%h_raw_sup)       !all other crops
+            else where ((bil1_old%h_soil*pheno%RF_e + bil2_old%h_soil*pheno%RF_t) < bil2%h_raw_sup)       !all other crops
                 ! TODO: %AB% why only 2nd layer RAWbig?
                 where(bil1_old%h_soil <= info_spat%theta(1)%FC%mat*bil1_old%d_e*1000)!
-                    h_irr_temp = fc_ratio *(( info_spat%theta(1)%FC%mat * bil1_old%d_e * 1000 - bil1_old%h_soil) + &!
-                        & (info_spat%theta(2)%FC%mat * bil2%d_t * 1000 - bil2_old%h_soil))/(info_spat%eff_met%mat)
+                    h_irr_temp = ((info_spat%theta(1)%FC%mat*bil1_old%d_e*1000-bil1_old%h_soil)+ &!
+                        & (info_spat%theta(2)%FC%mat*bil2%d_t*1000-bil2_old%h_soil))/(info_spat%eff_met%mat)
                 else where!
-                    h_irr_temp = fc_ratio*(info_spat%theta(2)%FC%mat * bil2%d_t * 1000 - bil2_old%h_soil)/&
+                    h_irr_temp = (info_spat%theta(2)%FC%mat*bil2%d_t*1000-bil2_old%h_soil)/&
                         & (info_spat%eff_met%mat)
                 end where!
             end where!
-        end where
-
-        where (h_irr_temp <0.0D0)
-            h_irr_temp = 0.0D0
         end where
 
         call irrigate_rice(h_irr_temp,pheno,eff_rain,xrice_ksat)!
@@ -214,12 +212,14 @@ module mod_irrigation
         forall(i=1:size(info_spat%domain%mat,1),j=1:size(info_spat%domain%mat,2),&!
             & info_spat%irr_meth_id%mat(i,j)/=info_spat%irr_meth_id%header%nan) &!
             & h_irr(i,j,info_spat%irr_meth_id%mat(i,j)) = h_irr_temp(i,j)!
-
+        
+        !call update_adj_perco_parameters(info_spat, h_irr_temp, day_from_irr, adj_perc_par)
+        
     end subroutine irrigation_need_fc!
 
     subroutine irrigation_scheduled(info_spat, doy_cur, year_cur, sch_irr, pheno, h_irr, &
-        & day_from_irr, adj_perc_par, verbose, bil1_old, bil2, bil2_old, &
-        & a_loss, b_loss, c_loss, wind_vel, temp_ave,losses,eff_rain,xrice_ksat,h_sat2)
+        & day_from_irr, adj_perc_par, debug, bil1_old, bil2, bil2_old, &
+        & a_loss, b_loss, c_loss, wind_vel, temp_ave,losses,eff_rain,xrice_ksat)
         ! spread irrigation height when scheduled
         ! TODO: need for testing
         ! TODO: include losses calculation inside
@@ -232,7 +232,7 @@ module mod_irrigation
         real(dp),dimension(:,:,:),intent(out)::h_irr!
         integer,dimension(:,:),intent(inout)::day_from_irr!
         real(dp),dimension(:,:,:),intent(inout)::adj_perc_par!
-        logical:: verbose
+        logical:: debug
         type(balance1_matrices),intent(inout):: bil1_old!
         type(balance2_matrices),intent(inout)::bil2, bil2_old!
         
@@ -242,7 +242,6 @@ module mod_irrigation
         real(dp),dimension(:,:),intent(inout)::losses
         real(dp),dimension(:,:),intent(in)::eff_rain
         real(dp),intent(in)::xrice_ksat     ! ksat of the transpirative layer for rice
-        real(dp),dimension(:,:),intent(in)::h_sat2
         
         real(dp),dimension(size(info_spat%domain%mat,1),size(info_spat%domain%mat,2))::h_irr_temp!
         
@@ -256,7 +255,7 @@ module mod_irrigation
         ! loop throw scheduled irrigation list and update 'irrigation'
         do i=1,size(sch_irr)!
             if (sch_irr(i)%year == year_cur .and. sch_irr(i)%doy == doy_cur) then
-                if (verbose .eqv. .true.) then
+                if (debug .eqv. .true.) then
                     print *,'current year = ',  year_cur, '; current day = ', doy_cur, &
                         & '; irr.unit.id= ', sch_irr(i)%irr_unit_id, '; water depth = ', sch_irr(i)%h_irr, &
                         & '; h_irr_max= ', maxval(h_irr), '; h_irr_temp_max= ', maxval(h_irr_temp)
@@ -276,10 +275,10 @@ module mod_irrigation
                             !h_irr_temp = (bil1_old%h_eva+bil2_old%h_transp_pot)!
                             h_irr_temp = ((info_spat%h_meth%mat-bil1_old%h_pond)+ & ! fill the ponding layer
                                         (info_spat%theta(1)%sat%mat*bil1_old%d_e*1000-bil1_old%h_soil)+ &!
-                                        (h_sat2-bil2_old%h_soil) + & ! fill the soil layer to saturation
+                                        (info_spat%theta(2)%sat%mat*bil2%d_t*1000-bil2_old%h_soil) + & ! fill the soil layer to saturation
                                         (bil1_old%h_eva + bil2_old%h_transp_pot))/ & ! fill ET
                                         1.0 ! don't consider efficiency
-                        else where ((bil1_old%h_soil + bil2_old%h_soil) < bil2%h_raw_sup) ! all other crops
+                        else where ((bil1_old%h_soil*pheno%RF_e + bil2_old%h_soil*pheno%RF_t) < bil2%h_raw_sup) ! all other crops
                             ! TODO: %AB% why only 2nd layer RAWbig?
                             ! else where (bil2_old%tmm<bil2%RAWbig)
                             h_irr_temp = info_spat%h_meth%mat
@@ -295,11 +294,11 @@ module mod_irrigation
                             !h_irr_temp = (bil1_old%h_eva+bil2_old%h_transp_pot)/(info_spat%eff_met%mat)
                             h_irr_temp = ((info_spat%h_meth%mat-bil1_old%h_pond)+ & ! fill the ponding layer
                                         (info_spat%theta(1)%sat%mat*bil1_old%d_e*1000-bil1_old%h_soil)+ &!
-                                        (h_sat2-bil2_old%h_soil) + & ! fill the soil layer to saturation
+                                        (info_spat%theta(2)%sat%mat*bil2%d_t*1000-bil2_old%h_soil) + & ! fill the soil layer to saturation
                                         (bil1_old%h_eva + bil2_old%h_transp_pot))/ & ! fill ET
                                         (info_spat%eff_met%mat) ! consider also efficiency
                             ! else where (bil2_old%tmm<bil2%RAWbig)       !all other crops
-                        else where ((bil1_old%h_soil + bil2_old%h_soil) < bil2%h_raw_sup)       !all other crops
+                        else where ((bil1_old%h_soil*pheno%RF_e + bil2_old%h_soil*pheno%RF_t) < bil2%h_raw_sup)       !all other crops
                             ! TODO: %AB% why only 2nd layer RAWbig?
                             where(bil1_old%h_soil <= info_spat%theta(1)%FC%mat*bil1_old%d_e*1000)!
                                 h_irr_temp = ((info_spat%theta(1)%FC%mat*bil1_old%d_e*1000-bil1_old%h_soil)+ &!
@@ -333,6 +332,8 @@ module mod_irrigation
             & info_spat%irr_meth_id%mat(i,j)/=info_spat%irr_meth_id%header%nan) &
             & h_irr(i,j,info_spat%irr_meth_id%mat(i,j)) = h_irr_temp(i,j)!
 
+        !call update_adj_perco_parameters(info_spat, h_irr_temp, day_from_irr, adj_perc_par)
+        
     end subroutine irrigation_scheduled
     
     subroutine irrigate_rice(h_irr,pheno,eff_rain,k_sat)!
@@ -346,7 +347,7 @@ module mod_irrigation
         !!
         ! init the minimum irrigation height (equal to infiltration)
         h_irr_min = 10.*24.*k_sat ! k_sat is in mm
-        where(pheno%irrigation_class==1 .and. pheno%cn_class==7 .and. pheno%k_cb>0.0D0) !%PS%: added check on k_cb (otherwise irrigation triggers after harvest)
+        where(pheno%irrigation_class==1 .and. pheno%cn_class==7)  
             h_irr = max(0.0D0,h_irr_min + h_irr - eff_rain)  ! %CG%: irrigation compensate ET and Percolation, minus effective rain 
             !where(h_irr<=h_irr_min) h_irr = h_irr_min       ! irrigation height at least equal to the minimum irrigation height
             !where(eff_rain>=h_irr) h_irr = 0.               ! if effective precipitation > irrigation height -> zero irrigation height
@@ -355,15 +356,14 @@ module mod_irrigation
         end where!
     end subroutine irrigate_rice!
 
-    subroutine irrigation_use(domain, irr_units_map, irr_class, method, irr_units, transp_pot, k_cb, h_soil_old,       &
-                            & h_raw_coll, h_raw_half, h_raw, h_raw_priv, h_irr, doy, priv_irr, coll_irr, day_from_irr, &
-                            & esp_perc, am_perc,bm_perc, f_shape_area, cell_area, h_met, irr_starts, irr_ends, cn_class )
-        ! calculate irrigation heights in "USE" mode
+    subroutine irrigation_use(domain, irr_units_map, irr_class, method, &!
+        & irr_units, transp_pot, h_old, h_raw_coll,h_raw_half,h_raw,h_raw_priv,h_irr,doy,priv_irr,coll_irr, &!
+        & day_from_irr,esp_perc,am_perc,bm_perc, f_shape_area, cell_area, h_met,irr_starts,irr_ends)!
+        ! calculate irrigation heights at use mode
         type(grid_i),intent(in)::domain, irr_units_map, method
-        integer,dimension(:,:),intent(in)::irr_class, cn_class
-        type(irr_units_table),dimension(:),intent(inout)::irr_units
-        real(dp),dimension(:,:),intent(in)::h_soil_old                 ! average soil water content of previous day [mm]
-        real(dp),dimension(:,:),intent(in)::k_cb                       ! crop coefficient
+        integer,dimension(:,:),intent(in)::irr_class!
+        type(irr_units_table),dimension(:),intent(inout)::irr_units!
+        real(dp),dimension(:,:),intent(in)::h_old                      ! water content of 2nd layer of previous day [mm]
         real(dp),dimension(:,:),intent(in)::transp_pot                 ! potential transpiration of previous day [mm]
         real(dp),dimension(:,:),intent(in)::h_raw, h_raw_half          ! soil water content at RAW and half RAW [mm]
         real(dp),dimension(:,:),intent(in)::h_raw_coll                 ! irrigation threshold for collective water sources [mm]
@@ -380,17 +380,15 @@ module mod_irrigation
         integer,dimension(:,:),intent(in)::irr_starts
         integer,dimension(:,:),intent(in)::irr_ends
         logical,intent(in)::f_shape_area
-
-        integer :: i, j, k, shift, p
-        integer :: n_cells_tobe_irr ! number of cells that might receive irrigation today (in-season & with an irrigable crop growing)
-        integer :: n_cells_req_irr  ! number of cells that require irrigation from monitored sources today (irrigable + soil dry enough)
+        
+        integer::i,j,k,shift,p!
+        integer::n_cells_tobe_irr
         integer,parameter::sec_to_day=24*60*60
         real(dp),dimension(domain%header%imax,domain%header%jmax)::v_irr_cell   ! irrigation volumes [m^3]
         logical,dimension(domain%header%imax,domain%header%jmax)::irr_mask      ! a mask to get all the irrigable cells
         integer,dimension(:,:),allocatable::i_mat,j_mat,id_cell                 ! for movement inside the matrix
         integer,dimension(size(irr_units))::ind!
         integer,dimension(:),allocatable::vi,vj,vid
-        integer,dimension(:),allocatable::s_cn_class
         integer,dimension(:),allocatable::vcells ! sign the cells already processed
         ! shifted copies of the already defined variable (see above)
         real(dp),dimension(:),allocatable::s_h_old, s_h_raw_coll, s_h_raw, s_h_raw_half, &
@@ -398,10 +396,9 @@ module mod_irrigation
                                             & s_def_day, s_v_irr_cell, s_h_met
         real(dp)::n_day_to_deficit ! expected number of days to deficit
         integer::dist
-        real(dp)::Q_tot_act,Q_tot_pot,q_cell,q_mean,q_act_avail,q_pot_avail,q_deliv,h_deliv!
-        logical::rice_req,cell_req!
+        real(dp)::Q_tot_act,Q_tot_pot,q_cell,q_mean!
         
-        ! Flooded rice uses a ponding/saturation demand depth, but remains limited by source availability.
+        ! rice cells are not considered in a different way as theta is already corrected
         
         ! TODO: move the initialization of the cell_area outside in order to overcome control
         if (f_shape_area .eqv. .false.) then
@@ -447,8 +444,7 @@ module mod_irrigation
             irr_mask=(irr_units_map%mat==irr_units(k)%id &
                      .and. irr_class==1 &
                      .and. irr_starts<=doy &
-                     .and. irr_ends>=doy &
-                     .and. k_cb > 0.0D0) !%PS% ensure crop is growing (safer than irrigation_class, which is sometimes not switched off: TODO: check)
+                     .and. irr_ends>=doy)
 
             n_cells_tobe_irr = count(irr_mask)!
             
@@ -463,7 +459,7 @@ module mod_irrigation
                 allocate(vj(n_cells_tobe_irr)); vj=pack(j_mat,irr_mask)!
                 allocate(vid(n_cells_tobe_irr)); vid=pack(id_cell,irr_mask)!
                 ! the following are all the required parameters
-                allocate(s_h_old(n_cells_tobe_irr)); s_h_old=pack(h_soil_old,irr_mask)!
+                allocate(s_h_old(n_cells_tobe_irr)); s_h_old=pack(h_old,irr_mask)!
                 allocate(s_h_raw_coll(n_cells_tobe_irr)); s_h_raw_coll=pack(h_raw_coll,irr_mask)!
                 allocate(s_h_raw(n_cells_tobe_irr)); s_h_raw=pack(h_raw,irr_mask)!
                 allocate(s_h_raw_half(n_cells_tobe_irr)); s_h_raw_half=pack(h_raw_half,irr_mask)!
@@ -472,9 +468,7 @@ module mod_irrigation
                 allocate(vcells(n_cells_tobe_irr)); vcells=0
                 allocate(s_v_irr_cell(n_cells_tobe_irr)); s_v_irr_cell=pack(v_irr_cell,irr_mask)!
                 allocate(s_h_met(n_cells_tobe_irr)); s_h_met=pack(h_met,irr_mask)!
-                allocate(s_cn_class(n_cells_tobe_irr)); s_cn_class=pack(cn_class,irr_mask)!
-                n_cells_req_irr = count(s_h_old <= s_h_raw_coll .or. (s_cn_class==7 .and. s_h_met>0.0D0))
-
+                
                 ! find the index of the latest irrigated cell (the day before)
                 ! get_value_index returns shift=0 by default
                 if (any(vid == irr_units(k)%last_cell_id)) then
@@ -493,7 +487,6 @@ module mod_irrigation
                 s_h_transp_pot = cshift(s_h_transp_pot,shift)!
                 s_v_irr_cell = cshift(s_v_irr_cell,shift)!
                 s_h_met = cshift(s_h_met,shift)!
-                s_cn_class = cshift(s_cn_class,shift)!
                 
                 ! TODO: discharge at cell not in irrigation unit
                 ! average net discharge required by the irrigation unit
@@ -514,49 +507,30 @@ module mod_irrigation
                     
                     ! discharge assigned to p-cell (not considering the field efficiency)
                     q_cell = s_v_irr_cell(p)/sec_to_day   
-                    rice_req = (s_cn_class(p)==7 .and. s_h_met(p)>0.0D0)
-                    cell_req = (s_h_old(p)<=s_h_raw_coll(p) .or. rice_req)
-                    q_act_avail = irr_units(k)%q_day - Q_tot_act
-                    q_pot_avail = irr_units(k)%q_day * irr_units(k)%f_explore - Q_tot_pot
                     
-                    if(q_cell<=0.0D0) then
-                        irr_units(k)%last_cell_id = vid(p)
-                        cycle cell_loop
-                    end if
+                    ! check if the water is enough for irrigation                    
+                    ! %AB% if there is enough water to irrigate the current cell
+                    ! %AB% and the delivered can irrigate the current cell
+                    if((Q_tot_pot + q_cell) < (irr_units(k)%q_day * irr_units(k)%f_explore) .and. & 
+                        & (Q_tot_act + q_cell) <= irr_units(k)%q_day) then                           
+                
+                        ! %AB% record the index of the current cell.
+                        ! It could be the latest irrigated in the current day and the first in the following 
+                        Q_tot_pot = Q_tot_pot + q_cell
+                        irr_units(k)%last_cell_id = vid(p)  
+                        vcells(p) = vid(p)!
                     
-                    ! check if the water is enough for irrigation
-                    ! Flooded rice can use a partial application when today's source availability is
-                    ! lower than the full ponding/saturation request.
-                    if(rice_req .and. cell_req) then
-                        if(q_act_avail<=0.0D0 .or. q_pot_avail<=0.0D0) exit cell_loop
-                        q_deliv = min(q_cell,q_act_avail,q_pot_avail)
-                    else if((Q_tot_pot + q_cell) < (irr_units(k)%q_day * irr_units(k)%f_explore) .and. & 
-                        & (Q_tot_act + q_cell) <= irr_units(k)%q_day) then
-                        q_deliv = q_cell
+                        ! check if the cell is irrigable according to the soil water content less than the RAW big threshold
+                        ! %AB% alternative consider the number of days to have deficit 
+                        if(s_h_old(p)<=s_h_raw_coll(p)) then !.or. dgg <= (n/IU(k)%n_irrigable_cells))then
+                            ! %AB% apply the irrigation depth of the method
+                            ! %AB% and sum the discharge actually delivered to the cell
+                            coll_irr(vi(p),vj(p)) = s_h_met(p)
+                            Q_tot_act = Q_tot_act + q_cell
+                        end if!
                     else
                         exit cell_loop
                     end if
-                    
-                    if(q_deliv<=0.0D0) exit cell_loop
-                
-                    ! %AB% record the index of the current cell.
-                    ! It could be the latest irrigated in the current day and the first in the following
-                    Q_tot_pot = Q_tot_pot + q_deliv
-                    if(q_deliv>=q_cell) then
-                        irr_units(k)%last_cell_id = vid(p)  
-                    end if
-                    vcells(p) = vid(p)!
-                    
-                    ! check if the cell is irrigable according to the soil water content less than the RAW big threshold
-                    ! %AB% alternative consider the number of days to have deficit
-                    if(cell_req) then !.or. dgg <= (n/IU(k)%n_irrigable_cells))then
-                        ! %AB% apply the irrigation depth of the method
-                        ! %AB% and sum the discharge actually delivered to the cell
-                        h_deliv = s_h_met(p)
-                        if(rice_req) h_deliv = s_h_met(p) * q_deliv/q_cell
-                        coll_irr(vi(p),vj(p)) = h_deliv
-                        Q_tot_act = Q_tot_act + q_deliv
-                    end if!
                 end do cell_loop
                 !
                 ! %AB% update the irrigation period
@@ -567,15 +541,17 @@ module mod_irrigation
                 else ! irrigation units with no irrigable cells
                     irr_units(k)%n_irrigated_cells = 0
                 end if
-
+            
                 ! mass conservation: how much water remains
                 irr_units(k)%q_surplus = irr_units(k)%q_day - Q_tot_act
-
-                ! Store the amount of water surplus for the next day if:
-                ! 1 - the IU has at least a cell eligible for irrigation (irr_class == 1, k_cb > 0, in-season)
-                ! 2 - at least one eligible cell requires collective-source irrigation !%PS%: Used to be "at least one cell was irrigated". Now surplus can be carried over to the next day if we are waiting for it to reach a "usable" threshold;
-                ! 3 - not all cells in the IU were evaluated today                                                                        ! ; with this condition it is acceptable to simulate a IU receiving x m3/s every n days using a x/n m3/s daily flow,
-                if (n_cells_tobe_irr/=0 .and. n_cells_req_irr /= 0 .and. irr_units(k)%n_irrigated_cells /= n_cells_tobe_irr) then         ! , even when the resulting flow is insufficient to trigger one irrigation event per day (as per original IdrAgra v1 behaviour)
+                
+                ! %AB% store the amount of water surplus for the next day if:
+                ! 1 - the irrigation unit has irrigable cells
+                ! 2 - not all the cells are evaluated for irrigation requirements
+                ! 3 - current day is in the irrigation season
+                !if (n/=0 .and. irr_units(k)%n_irrigated_cells /= n .and. doy < end_irr_season) then
+                if (n_cells_tobe_irr/=0 .and. irr_units(k)%n_irrigated_cells /= 0 .and. & ! %EAC% also the number of irrigated cells must be zero
+                    & irr_units(k)%n_irrigated_cells /= n_cells_tobe_irr) then
                     irr_units(k)%q_rem = irr_units(k)%q_surplus
                     irr_units(k)%q_surplus = 0.  ! %AB% re-init the surplus
                 else
@@ -612,11 +588,10 @@ module mod_irrigation
                     s_h_transp_pot=cshift(s_h_transp_pot,shift)!
                     s_v_irr_cell=cshift(s_v_irr_cell,shift)!
                     s_h_met=cshift(s_h_met,shift)
-                    s_cn_class=cshift(s_cn_class,shift)
                     
                     do p=1,n_cells_tobe_irr!
                         if((p>=dist).and.(.not.(any(vcells==vid(p)))))then!
-                            if(s_h_old(p) <= s_h_raw_priv(p) .or. (s_cn_class(p)==7 .and. s_h_met(p)>0.0D0)) then!
+                            if(s_h_old(p) <= s_h_raw_priv(p)) then!
                                 ! %AB% irrigation volume is equal to the irrigation depth of the method
                                 priv_irr(vi(p),vj(p)) = s_h_met(p)                    
                                 irr_units(k)%q_un_priv = irr_units(k)%q_un_priv + s_v_irr_cell(p)/sec_to_day
@@ -641,7 +616,6 @@ module mod_irrigation
                 deallocate(vcells)
                 deallocate(s_v_irr_cell)
                 deallocate(s_h_met)
-                deallocate(s_cn_class)
             end if
         end do irr_units_loop ! end irrigation units loop
         !!
@@ -684,8 +658,8 @@ module mod_irrigation
     end subroutine irrigation_use!
 
     subroutine calc_daily_duty(cur_doy,irr_units,sources_info,wat_sources,irr_units_map,domain_map,par,&!
-        & irrigation_class, k_cb, h_soil_old,h_transp_pot,raw,h_fc,zr)!
-        ! estimate the water volume for irrigation available in each irrigation units
+        & irrigation_class,h_soil,h_transp_pot,raw,h_fc,zr)!
+        ! estimate the water volume for irrigation available in each irrigation units 
         integer,intent(in)::cur_doy ! current day of simulation
         type(irr_units_table), dimension(:),intent(inout)::irr_units!
         type(source_info),intent(in)::sources_info!
@@ -693,23 +667,25 @@ module mod_irrigation
         type(grid_i),intent(in)::irr_units_map,domain_map!
         type(parameters),intent(in)::par!
         integer,dimension(:,:),intent(in)::irrigation_class!
-        real(dp),dimension(:,:),intent(in)::k_cb, h_soil_old, h_transp_pot, raw,h_fc, zr!
-
+        real(dp),dimension(:,:),intent(in)::h_soil, h_transp_pot, raw,h_fc, zr!
+        !!
         integer,dimension(:,:),allocatable::cells_un_coll       ! map of the cells irrigated by unmonitored collective water sources
         real(dp)::frac_rel_un_coll                              ! fraction of water released respect to the maximum water available
         integer:: n_cells_irr_un_coll                           ! number of cells irrigated by unmonitored collective water sources
         integer:: n_cells_un_coll                               ! number of cells irrigable by unmonitored collective water sources
-        integer::i,j,k
-
+        !real(dp),dimension(par%cr%n_withdrawals)::q_un_coll!
+        integer::i,j,k!
+        !!
         ! estimate the daily duty for each irrigation units
-        irr_units%q_act_fld(1)=0.;irr_units%q_act_fld(2)=0.;irr_units%q_act_fld(3)=0.;irr_units%q_act_fld(4)=0.;
-        irr_units%q_day=0.
+        irr_units%q_act_fld(1)=0.;irr_units%q_act_fld(2)=0.;irr_units%q_act_fld(3)=0.;irr_units%q_act_fld(4)=0.;!
+        irr_units%q_day=0.!
         irr_units%q_surplus=0.
         irr_units%n_irrigated_cells=0.
         irr_units%q_un_priv=0.
         irr_units%q_un_coll=0.
         frac_rel_un_coll = 0.
-
+        !q_un_coll=0.!
+        !
         if(.not.(allocated(cells_un_coll))) allocate(cells_un_coll(domain_map%header%imax, domain_map%header%jmax))
         cells_un_coll = 0
         if (par%cr%f_exists .eqv. .true.) then
@@ -717,14 +693,13 @@ module mod_irrigation
                 ! %AB% irrigation_class is updated every days, so this cycle must be updated every day
                 if (wat_sources(i)%type_id == 4) then
                     where (irr_units_map%mat == wat_sources(i)%id_irr_unit &
-                        & .and. domain_map%mat /= domain_map%header%nan &
-                        & .and. irrigation_class == 1 &
-                        & .and. k_cb > 0.0D0) & !%PS% ensure crop is growing (safer than irrigation_class, which is sometimes not switched off: TODO: check)
+                        &.and. domain_map%mat /= domain_map%header%nan &
+                        & .and. irrigation_class == 1) &
                         & cells_un_coll = wat_sources(i)%wat_src_idx
                 end if
             end do
         end if
-
+        !
         do i=1,size(wat_sources)!
             j=wat_sources(i)%irr_unit_idx;
             if (j==0) then
@@ -733,17 +708,14 @@ module mod_irrigation
             end if
             k=wat_sources(i)%wat_src_idx!
             select case(wat_sources(i)%type_id)!
-                case(1)
+                case(1)!
                     irr_units(j)%q_act_fld(1) = wat_sources(i)%duty_frc * sources_info%mn_src_tbl1%q_daily(cur_doy,k) * irr_units(j)%int_distr_eff + irr_units(j)%q_act_fld(1)
-
-                case(2)
+                case(2)!
                     irr_units(j)%q_act_fld(2) = wat_sources(i)%duty_frc * sources_info%mn_src_tbl2%q_daily(cur_doy,k) * irr_units(j)%int_distr_eff + irr_units(j)%q_act_fld(2)
-
-                case(3)
+                case(3)!
                     irr_units(j)%q_act_fld(3) = wat_sources(i)%duty_frc * sources_info%int_reuse_tbl%q_daily(cur_doy,k) * irr_units(j)%int_distr_eff + irr_units(j)%q_act_fld(3)
-
-                case(4) ! collective unmonitored sources
-                    frac_rel_un_coll = deliverable_ratio_unm_coll(cells_un_coll,h_soil_old,h_transp_pot,raw,h_fc,zr,irrigation_class,par, &
+                case(4)!
+                    frac_rel_un_coll = deliverable_ratio_unm_coll(cells_un_coll,h_soil,h_transp_pot,raw,h_fc,zr,irrigation_class,par, &
                                         & domain_map%header%imax, domain_map%header%jmax, k)!
                     n_cells_irr_un_coll = count(cells_un_coll==k .and. irrigation_class==1)!
                     n_cells_un_coll = count(cells_un_coll==k)
@@ -758,10 +730,9 @@ module mod_irrigation
                     
                     ! at irrigation unit, alway consider the 
                     irr_units(j)%q_un_coll = irr_units(j)%q_act_fld(4)
-
-                case default
-            end select
-        end do
+                case default!
+            end select!
+        end do!
 
         ! compute the water duty of each irrigation unit
         irr_units%q_day=irr_units%q_act_fld(1)+irr_units%q_act_fld(2)+irr_units%q_act_fld(3)+irr_units%q_act_fld(4)+irr_units%q_rem ! %AB% consider also the water surplus of the previous day

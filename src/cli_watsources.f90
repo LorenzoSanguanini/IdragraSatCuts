@@ -317,6 +317,106 @@ module cli_watsources
         !
     end subroutine open_scheduled_irrigation!
 
+    subroutine open_irrigation_blackout(file_name, irr_black, debug)!
+        ! open optional irrigation blackout file (row col year doy_start doy_end)
+        ! if the file does not exist, irr_black is allocated with size 0 (no-op)
+        implicit none
+        character(len=*), intent(in) :: file_name!
+        logical, intent(IN):: debug
+        type(irrigation_blackout),dimension(:),allocatable,intent(out)::irr_black!
+        integer :: error_flag!
+        integer :: i,n_rec,free_unit!
+        integer :: ios
+        logical :: f_exists
+
+        error_flag = 0
+        ios = 0
+
+        inquire(file=trim(file_name), exist=f_exists)
+        if (f_exists .eqv. .false.) then
+            allocate(irr_black(0))
+            if (debug) print *, 'No irrigation blackout file found (optional): ', trim(file_name)
+            return
+        end if
+
+        call seek_un( error_flag, free_unit)
+        open( unit=free_unit, file=trim(file_name), status='old', action="read", iostat=ios )
+        if (ios /= 0 ) then
+            print *, "Cannot open file ", trim(file_name), ". Execution will be aborted..."
+            stop
+        end if
+
+        read( free_unit, *, iostat=ios) n_rec
+        read( free_unit, *, iostat=ios)                 ! skip header
+        allocate(irr_black(n_rec))
+        do i=1,size(irr_black)
+            read(free_unit,*) irr_black(i)%row, irr_black(i)%col, irr_black(i)%year, &
+                & irr_black(i)%doy_start, irr_black(i)%doy_end
+        end do
+        close(free_unit)
+
+        if (debug) then
+            print *,'===== DEBUG: irrigation blackout ====='
+            print *,'row col year doy_start doy_end'
+            do i=1,size(irr_black)
+                print *, irr_black(i)%row,' ', irr_black(i)%col,' ', irr_black(i)%year,' ', &
+                    & irr_black(i)%doy_start,' ', irr_black(i)%doy_end
+            end do
+            print *,'===== END DEBUG ====='
+        end if
+
+    end subroutine open_irrigation_blackout!
+
+    subroutine open_forced_cuts(file_name, forced_cuts_list, debug)!
+        ! open optional forced cut file (row col year doy)
+        ! if the file does not exist, the list is allocated with size 0 (no-op)
+        ! and the model keeps using the standard GDD-based harvest calendar.
+        implicit none
+        character(len=*), intent(in) :: file_name!
+        logical, intent(IN):: debug
+        type(forced_cut),dimension(:),allocatable,intent(out)::forced_cuts_list!
+        integer :: error_flag!
+        integer :: i,n_rec,free_unit!
+        integer :: ios
+        logical :: f_exists
+
+        error_flag = 0
+        ios = 0
+
+        inquire(file=trim(file_name), exist=f_exists)
+        if (f_exists .eqv. .false.) then
+            allocate(forced_cuts_list(0))
+            if (debug) print *, 'No forced cuts file found (optional): ', trim(file_name)
+            return
+        end if
+
+        call seek_un( error_flag, free_unit)
+        open( unit=free_unit, file=trim(file_name), status='old', action="read", iostat=ios )
+        if (ios /= 0 ) then
+            print *, "Cannot open file ", trim(file_name), ". Execution will be aborted..."
+            stop
+        end if
+
+        read( free_unit, *, iostat=ios) n_rec
+        read( free_unit, *, iostat=ios)                 ! skip header
+        allocate(forced_cuts_list(n_rec))
+        do i=1,size(forced_cuts_list)
+            read(free_unit,*) forced_cuts_list(i)%row, forced_cuts_list(i)%col, &
+                & forced_cuts_list(i)%year, forced_cuts_list(i)%doy
+        end do
+        close(free_unit)
+
+        if (debug) then
+            print *,'===== DEBUG: forced cuts ====='
+            print *,'row col year doy'
+            do i=1,size(forced_cuts_list)
+                print *, forced_cuts_list(i)%row,' ', forced_cuts_list(i)%col,' ', &
+                    & forced_cuts_list(i)%year,' ', forced_cuts_list(i)%doy
+            end do
+            print *,'===== END DEBUG ====='
+        end if
+
+    end subroutine open_forced_cuts!
     subroutine read_water_sources_table(wat_sour_tbl_fn, wat_sour_tbl, error_flag)!
         ! Read the list of water sources for each irrigation units.
         ! Each sources have an id, a type and the release ratio 
@@ -510,7 +610,7 @@ module cli_watsources
     end subroutine close_water_sources_dudy!
 
     subroutine nom_water_supply(watsources_fn, irr_units, src_info, wat_src_tbl, f_shapearea, cell_size, shape_area, &
-                                & irr_unit_map, verbose)
+                                & irr_unit_map, debug)
         implicit none!
         character(len=*), intent(in):: watsources_fn!
         type(irr_units_table),dimension(:),intent(inout)::irr_units!
@@ -520,7 +620,7 @@ module cli_watsources
         real(dp),intent(in)::cell_size
         real(dp),dimension(:,:),intent(in)::shape_area
         integer,dimension(:,:),intent(in)::irr_unit_map
-        logical,intent(in)::verbose
+        logical,intent(in)::debug
         integer,parameter::sec_to_day=24*60*60  ![s/d]!
         integer::i,j,k
         
@@ -568,7 +668,7 @@ module cli_watsources
         end if
         
         ! TODO: save as CSV file
-        if (verbose .eqv. .true.) then
+        if (debug .eqv. .true.) then
             print *,'===== DEBUG: water sources ====='
             print *,'Irrigation units IDs',irr_units%id
             print *,'Irrigation units Qnom',irr_units%q_nom

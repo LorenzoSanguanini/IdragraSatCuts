@@ -10,8 +10,8 @@ module cli_save_outputs!
     implicit none!
 
     type output!
-        integer::unit                    ! unit linked to the file
-        character(len=255)::fn = ''      ! name of the file, set to empty by default
+        integer::unit               ! unit linked to the file
+        character(len=255)::fn      ! name of the file
     end type output!
 
     type coordinate!
@@ -20,7 +20,7 @@ module cli_save_outputs!
     end type coordinate!
 
     type cell_output!
-        type(output)::file          ! file object
+        type(output)::file          !
         integer::num                ! cell id (only for reading)
         type(coordinate)::coord     !
     end type cell_output!
@@ -44,17 +44,17 @@ module cli_save_outputs!
     end type output_table_list!
 
     type out_2d_mat
-        character(len=255)::fn  = ''                            ! name of the file, set to empty by default
+        character(len=255)::fn                                  ! name of the file
         real(dp),dimension(:,:),pointer::mat                    ! single data matrix
     end type out_2d_mat!
 
     type out_3d_mat
-        character(len=255)::fn = ''                             ! name of the file, set to empty by default
+        character(len=255)::fn                                  ! name of the file
         real(dp),dimension(:,:,:),pointer::mat                  ! data matrix per layer 
     end type out_3d_mat!
     
     type out_4d_mat
-        character(len=255)::fn = ''                             ! name of the file, set to empty by default
+        character(len=255)::fn                                  ! name of the file
         real(dp),dimension(:,:,:,:),pointer::mat                ! data matrix per layer and condiction
     end type out_4d_mat!
     
@@ -147,7 +147,7 @@ module cli_save_outputs!
         !
         errorflag=0!
         ios=0!
-
+        !
         call seek_un(errorflag,free_unit)    ! in utility
         open(free_unit,file=file_name,action="write",iostat=ios)!
         if(ios/=0)then!
@@ -162,8 +162,7 @@ module cli_save_outputs!
         end if!
     end subroutine init_cell_output_file!
     
-    subroutine init_cell_output_by_year(out_tbl_list,path,yr,id_ws_list, mode, f_cell_exists, sim, &
-                                       & id_irr_unit_list, n_nm_pub, id_nm_pub_list)!
+    subroutine init_cell_output_by_year(out_tbl_list,path,yr,id_ws_list, mode, f_cell_exists, debug, id_irr_unit_list, n_nm_pub, id_nm_pub_list)!
         ! read the list of output cells and
         ! prepare the output file for the selected year
         character(len=*),intent(in)::path                                   ! output path
@@ -174,8 +173,7 @@ module cli_save_outputs!
         character(len=*),dimension(:),intent(in),optional::id_nm_pub_list   ! id list of non monitored public sources
         type(output_table_list),intent(inout)::out_tbl_list                 ! list of the output table to be printed
         integer, intent(in)::mode                                           ! simulation mode
-        logical,intent(in)::f_cell_exists
-        type(simulation),intent(in)::sim
+        logical,intent(in)::f_cell_exists,debug
         character(len=100),dimension(:),allocatable::id_irr_unit_str!
         character(len=100),dimension(:),allocatable::id_ws_str
         character(len=100),dimension(:),allocatable::w_str!
@@ -185,7 +183,6 @@ module cli_save_outputs!
         character(len=255)::title!
         character(len=300) :: comment, buffer, label
         integer :: line, table_start, p
-
 
         ! TODO: move to a separate subroutine
         line = 0
@@ -217,9 +214,11 @@ module cli_save_outputs!
                             case ('ncells')
                                 read (buffer, *, iostat = ios) n_cells
                                 allocate(out_tbl_list%sample_cells(n_cells),out_tbl_list%cell_info(n_cells),out_tbl_list%prod_info(n_cells))
-                                if (sim%prt_cell_convergence=='y') allocate(out_tbl_list%cell_conv(n_cells))!
-                                if (sim%prt_cell_evaporation=='y') allocate(out_tbl_list%cell_eva(n_cells))!
-                                if (sim%prt_cell_runoff=='y') allocate(out_tbl_list%cell_cn(n_cells))!
+                                if (debug .eqv. .true.) then
+                                    allocate(out_tbl_list%cell_conv(n_cells))!
+                                    allocate(out_tbl_list%cell_eva(n_cells))!
+                                    allocate(out_tbl_list%cell_cn(n_cells))!
+                                end if
                             case ('table')
                                 table_start = line
                                 read (freeunit, *) ! skip the table header
@@ -250,6 +249,14 @@ module cli_save_outputs!
             out_tbl_list%cell_info%coord%col=out_tbl_list%sample_cells%coord%col!
             out_tbl_list%prod_info%coord%row=out_tbl_list%sample_cells%coord%row!
             out_tbl_list%prod_info%coord%col=out_tbl_list%sample_cells%coord%col!
+            if (debug .eqv. .true.) then
+                out_tbl_list%cell_conv%coord%row=out_tbl_list%sample_cells%coord%row!
+                out_tbl_list%cell_conv%coord%col=out_tbl_list%sample_cells%coord%col!
+                out_tbl_list%cell_eva%coord%row=out_tbl_list%sample_cells%coord%row!
+                out_tbl_list%cell_eva%coord%col=out_tbl_list%sample_cells%coord%col!
+                out_tbl_list%cell_cn%coord%row=out_tbl_list%sample_cells%coord%row!
+                out_tbl_list%cell_cn%coord%col=out_tbl_list%sample_cells%coord%col!
+            end if
             !
             ! save file header and connect to the control cell
             do i=1,size(out_tbl_list%sample_cells)!
@@ -299,11 +306,8 @@ module cli_save_outputs!
                 call init_cell_output_file(out_tbl_list%prod_info(i)%file%unit,trim(path)//trim(adjustl(out_tbl_list%prod_info(i)%file%fn)), 'input files')!
             end do!
             
-            ! convergence log
-            if (sim%prt_cell_convergence=='y') then
-                out_tbl_list%cell_conv%coord%row=out_tbl_list%sample_cells%coord%row!
-                out_tbl_list%cell_conv%coord%col=out_tbl_list%sample_cells%coord%col!
-
+            if (debug .eqv. .true.) then
+                ! convergence log
                 do i=1,size(out_tbl_list%cell_conv)!
                     write(row_str,*)out_tbl_list%cell_conv(i)%coord%row!
                     write(col_str,*)out_tbl_list%cell_conv(i)%coord%col!
@@ -312,13 +316,7 @@ module cli_save_outputs!
                     call init_cell_output_file(out_tbl_list%cell_conv(i)%file%unit,trim(path)//trim(adjustl(out_tbl_list%cell_conv(i)%file%fn)), &!
                         & 'date; hour; mmax1; nIter1; mmax2; nIter2')!
                 end do!
-            end if
-
-            ! evaporation terms
-            if (sim%prt_cell_evaporation=='y') then
-                out_tbl_list%cell_eva%coord%row=out_tbl_list%sample_cells%coord%row!
-                out_tbl_list%cell_eva%coord%col=out_tbl_list%sample_cells%coord%col!
-
+                ! evaporation terms
                 do i=1,size(out_tbl_list%cell_eva)!
                     write(row_str,*)out_tbl_list%cell_eva(i)%coord%row!
                     write(col_str,*)out_tbl_list%cell_eva(i)%coord%col!
@@ -334,13 +332,7 @@ module cli_save_outputs!
                         & 'Ke'//'; '//&                                                 ! Evaporation coefficient
                         & 'eva_pot_mm'//'; '//'eva_mm'//'; '//'kr'//'; '//'fw_old')     ! Evaporation ! %RR% test kr fw_old
                 end do!
-            end if
-
-            ! CN & runoff terms
-            if (sim%prt_cell_runoff=='y') then
-                out_tbl_list%cell_cn%coord%row=out_tbl_list%sample_cells%coord%row!
-                out_tbl_list%cell_cn%coord%col=out_tbl_list%sample_cells%coord%col!
-
+                ! CN & runoff terms
                 do i=1, size(out_tbl_list%cell_cn)!
                     write(row_str,*)out_tbl_list%cell_cn(i)%coord%row!
                     write(col_str,*)out_tbl_list%cell_cn(i)%coord%col!
@@ -464,7 +456,7 @@ module cli_save_outputs!
         end if
         
         ! TODO: not referred to cells, move away
-        if (sim%prt_cell_et0=='y') then
+        if (debug .eqv. .true.) then
             allocate(id_ws_str(size(id_ws_list)))
             ! evapotranspiration for each weather station
             out_tbl_list%et0_ws%fn = trim(adjustl(yr))//'_et0_stations.csv'!
@@ -483,12 +475,11 @@ module cli_save_outputs!
         !
     end subroutine init_cell_output_by_year!
     !
-    subroutine close_cell_output_by_year(out_tbl_list,mode,f_cell_exists,sim)!
+    subroutine close_cell_output_by_year(out_tbl_list,mode,f_cell_exists,debug)!
         ! close all opened file
         integer,intent(in)::mode
-        logical,intent(in)::f_cell_exists
+        logical,intent(in)::f_cell_exists,debug
         type(output_table_list),intent(inout)::out_tbl_list
-        type(simulation),intent(in)::sim
         integer::i!
         !!
         if (f_cell_exists .eqv. .true.) then
@@ -496,15 +487,18 @@ module cli_save_outputs!
                 close(out_tbl_list%sample_cells(i)%file%unit)!
                 close(out_tbl_list%cell_info(i)%file%unit)!
                 close(out_tbl_list%prod_info(i)%file%unit)!
-                if (sim%prt_cell_convergence=='y') close(out_tbl_list%cell_conv(i)%file%unit)!
-                if (sim%prt_cell_evaporation=='y') close(out_tbl_list%cell_eva(i)%file%unit)!
-                if (sim%prt_cell_runoff=='y') close(out_tbl_list%cell_cn(i)%file%unit)!
+                if (debug .eqv. .true.) then
+                    close(out_tbl_list%cell_conv(i)%file%unit)!
+                    close(out_tbl_list%cell_eva(i)%file%unit)!
+                    close(out_tbl_list%cell_cn(i)%file%unit)!
+                end if
             end do!
-            
             deallocate(out_tbl_list%sample_cells,out_tbl_list%cell_info,out_tbl_list%prod_info)
-            if (sim%prt_cell_convergence=='y') deallocate(out_tbl_list%cell_conv)   !to re-allocate them the year after!
-            if (sim%prt_cell_evaporation=='y') deallocate(out_tbl_list%cell_eva)
-            if (sim%prt_cell_runoff=='y')deallocate(out_tbl_list%cell_cn)
+            if (debug .eqv. .true.) then
+                deallocate(out_tbl_list%cell_conv)   !to re-allocate them the year after!
+                deallocate(out_tbl_list%cell_eva)
+                deallocate(out_tbl_list%cell_cn)
+            end if
         end if
         if (mode == 1 ) then
             close(out_tbl_list%q_irr_units%unit)!
@@ -515,22 +509,21 @@ module cli_save_outputs!
             close(out_tbl_list%q_un_priv%unit)!
             close(out_tbl_list%n_inv_cells%unit)!
         end if
-        
-        if (sim%prt_cell_et0=='y') close(out_tbl_list%et0_ws%unit)!
-        
+        if (debug .eqv. .true.) then
+            close(out_tbl_list%et0_ws%unit)!
+        end if
     end subroutine close_cell_output_by_year!
     !
-    subroutine write_cell_info(info_spat, cell_info, mode, f_caprise, ze_fix, zr_fix, sim_year)
-        ! write parameters of control cells to "cellinfo" files (one every year for each control cell)
-
-        type(spatial_info),intent(in) :: info_spat
-        type(cell_output),dimension(:),intent(in) :: cell_info
-        real(dp), intent(in) :: ze_fix, zr_fix ! depth of the 1st and 2nd soil layers
-        integer, intent(in) :: mode
-        logical, intent(in) :: f_caprise       ! if true, capillary rise is activated
-        integer, intent(in) :: sim_year        ! year this output file refers to
-        integer :: x, y, i, k
-
+    subroutine write_cell_info(info_spat,cell_info,mode,f_caprise)!
+        ! write parameters of each cells
+        type(spatial_info),intent(in)::info_spat!
+        type(cell_output),dimension(:),intent(in)::cell_info!
+        integer, intent(in)::mode
+        logical, intent(in)::f_caprise           ! if true, capillary rise is activated
+        integer::x,y!
+        integer::i!
+        integer::k
+        !!
         do i=1,size(cell_info)!
             x=cell_info(i)%coord%row!
             y=cell_info(i)%coord%col!
@@ -590,9 +583,6 @@ module cli_save_outputs!
             write(cell_info(i)%file%unit,*)'ksat_II; ', info_spat%k_sat(2)%mat(x,y)!
             write(cell_info(i)%file%unit,*)'expn_I; ', info_spat%fact_n(1)%mat(x,y)!
             write(cell_info(i)%file%unit,*)'expn_II; ', info_spat%fact_n(2)%mat(x,y)!
-            write(cell_info(i)%file%unit,*)"1st layer's thickness; ", ze_fix
-            write(cell_info(i)%file%unit,*)"2nd layer's max thickness; ", zr_fix
-            write(cell_info(i)%file%unit,*)'Simulation year; ', sim_year
             if (f_caprise .eqv. .true.) then
                 write(cell_info(i)%file%unit,*)'CapFluxParam_a3; ', info_spat%a3%mat(x,y)!
                 write(cell_info(i)%file%unit,*)'CapFluxParam_a4; ', info_spat%a4%mat(x,y)!
@@ -635,7 +625,6 @@ module cli_save_outputs!
         integer::zmax
         integer::i!
         integer::nan=-9999.
-
         !!
         do i=1,size(info_prod)!
             x=info_prod(i)%coord%row!
@@ -717,7 +706,7 @@ module cli_save_outputs!
     end subroutine init_yearly_output!
     
     subroutine init_yearly_yield_output(yield_map,domain,cs)!
-        type(yield_t),intent(inout)::yield_map!
+        type(yield_t)::yield_map!
         integer,dimension(:,:),intent(in)::domain!
         integer,intent(in)::cs
         integer,parameter::fasi_kcb=4
@@ -818,17 +807,16 @@ module cli_save_outputs!
     end subroutine destroy_annual_debug_output!
     
     ! TODO: update name of the output file
-    subroutine init_step_output_file(a_step_map,path,yr,doy,calendar,init_total, string, sim)!
+    subroutine init_step_output_file(a_step_map,path,yr,doy,calendar,init_total, string)!
         character(len=*),intent(in)::path!
         integer,intent(in)::doy!
         character(len=*),intent(in)::yr
         integer,dimension(:),intent(in)::calendar!
         integer,intent(in)::init_total
         character(len=*),intent(in)::string
-        type(step_map),intent(inout)::a_step_map!
+        type(step_map),intent(out)::a_step_map!
         integer::i,total!
         character(len=33)::year,step!
-        type(simulation)::sim
         !!
         total=init_total!
 
@@ -838,18 +826,18 @@ module cli_save_outputs!
                 write(step,*)i!
                 step=trim(adjustl(string))//trim(adjustl(step))//'_'!
                 year=trim(adjustl(yr))//'_'!
-                if (sim%prt_stp_rain=='y') a_step_map%rain%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'prec.asc'))!
-                if (sim%prt_stp_transp_act=='y')a_step_map%transp_act%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'trasp_act.asc'))!
-                if (sim%prt_stp_transp_pot=='y')a_step_map%transp_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'trasp_pot.asc'))!
-                if (sim%prt_stp_irr=='y') a_step_map%irr%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'irr.asc'))!
-                if (sim%prt_stp_irr_loss=='y') a_step_map%irr_loss%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'irr_loss.asc'))!
-                if (sim%prt_stp_cap_rise=='y') a_step_map%cap_rise%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'caprise.asc'))!
-                if (sim%prt_stp_irr_nm_priv=='y') a_step_map%irr_nm_priv%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'irr_privw.asc'))!
-                if (sim%prt_stp_irr_nm_col=='y') a_step_map%irr_nm_col%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'irr_distr.asc'))!
-                if (sim%prt_stp_deep_perc=='y') a_step_map%deep_perc%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'flux2.asc'))!
-                if (sim%prt_stp_runoff=='y') a_step_map%runoff%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'runoff.asc'))!
-                if (sim%prt_stp_et_pot=='y') a_step_map%et_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'et_pot.asc'))!
-                if (sim%prt_stp_et_act=='y') a_step_map%et_act%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'et_act.asc'))!
+                a_step_map%rain%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'prec.asc'))!
+                a_step_map%transp_act%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'trasp_act.asc'))!
+                a_step_map%transp_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'trasp_pot.asc'))!
+                a_step_map%irr%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'irr.asc'))!
+                a_step_map%irr_loss%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'irr_loss.asc'))!
+                a_step_map%cap_rise%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'caprise.asc'))!
+                a_step_map%irr_nm_priv%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'irr_privw.asc'))!
+                a_step_map%irr_nm_col%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'irr_distr.asc'))!
+                a_step_map%deep_perc%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'flux2.asc'))!
+                a_step_map%runoff%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'runoff.asc'))!
+                a_step_map%et_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'et_pot.asc'))!
+                a_step_map%et_act%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'et_act.asc'))!
                 a_step_map = 0.0D0    ! init to zero
                 exit!
             else if (doy < total-calendar(i)+1) then ! exit from the cycle
@@ -861,17 +849,16 @@ module cli_save_outputs!
     end subroutine init_step_output_file!
     
     
-    subroutine init_step_debug_output_file(a_dbg_map,path,yr,doy,calendar,init_total,string,sim)!
+    subroutine init_step_debug_output_file(a_dbg_map,path,yr,doy,calendar,init_total,string)!
         character(len=*),intent(in)::path!
         integer,intent(in)::doy!
         character(len=*),intent(in)::yr
         integer,dimension(:),intent(in)::calendar!
         integer,intent(in)::init_total
         character(len=*),intent(in)::string
-        type(step_debug_map),intent(inout)::a_dbg_map!
+        type(step_debug_map),intent(out)::a_dbg_map!
         integer::i,total!
         character(len=33)::year,step!
-        type(simulation)::sim
         
         total=init_total!
 
@@ -881,12 +868,12 @@ module cli_save_outputs!
                 write(step,*)i!
                 step=trim(adjustl(string))//trim(adjustl(step))//'_'!
                 year=trim(adjustl(yr))//'_'!
-                if (sim%prt_dbg_eva_act=='y') a_dbg_map%eva_act%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'eva.asc'))!
-                if (sim%prt_dbg_eff_rain=='y') a_dbg_map%eff_rain%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'prec_eff.asc'))!
-                if (sim%prt_dbg_perc1=='y') a_dbg_map%perc1%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'perc1.asc'))!
-                if (sim%prt_dbg_perc2=='y') a_dbg_map%perc2%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'perc2.asc'))!
-                if (sim%prt_dbg_h_soil1=='y') a_dbg_map%h_soil1%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'theta1.asc'))!
-                if (sim%prt_dbg_h_soil2=='y') a_dbg_map%h_soil2%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'theta2.asc'))!
+                a_dbg_map%eva_act%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'eva.asc'))!
+                a_dbg_map%eff_rain%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'prec_eff.asc'))!
+                a_dbg_map%perc1%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'perc1.asc'))!
+                a_dbg_map%perc2%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'perc2.asc'))!
+                a_dbg_map%h_soil1%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'theta1.asc'))!
+                a_dbg_map%h_soil2%fn=trim(adjustl(trim(path)//trim(adjustl(year))//trim(adjustl(step))//'theta2.asc'))!
                 a_dbg_map = 0.0D0 ! set to zero after
                 exit!
             else if (doy < total-calendar(i)+1) then ! exit if lower
@@ -897,68 +884,65 @@ module cli_save_outputs!
         end do!
     end subroutine init_step_debug_output_file!
     !
-    subroutine init_yearly_output_file(a_yr_map,path,year,sim)
+    subroutine init_yearly_output_file(a_yr_map,path,year)
         character(len=*),intent(in)::path!
         character(len=*),intent(in)::year
-        type(annual_map),intent(inout)::a_yr_map!
+        type(annual_map),intent(out)::a_yr_map!
         character(len=33)::year_str
-        type(simulation)::sim
         !!
         year_str=trim(adjustl(year))//'_'!
-        if (sim%prt_yr_rain=='y') a_yr_map%rain%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'prec_tot.asc'))
-        if (sim%prt_yr_rain_crop_season=='y') a_yr_map%rain_crop_season%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'prec_agr.asc'))
-        if (sim%prt_yr_irr=='y') a_yr_map%irr%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'irr_tot.asc'))
-        if (sim%prt_yr_irr_loss=='y') a_yr_map%irr_loss%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'irr_loss.asc'))
-        if (sim%prt_yr_eva_act_crop_season=='y') a_yr_map%eva_act_crop_season%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eva_act_agr.asc'))
-        if (sim%prt_yr_eva_pot_crop_season=='y') a_yr_map%eva_pot_crop_season%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eva_pot_agr.asc'))
-        if (sim%prt_yr_transp_act=='y') a_yr_map%transp_act%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'trasp_act_tot.asc'))
-        if (sim%prt_yr_transp_pot=='y') a_yr_map%transp_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'trasp_pot_tot.asc'))
-        if (sim%prt_yr_runoff=='y') a_yr_map%runoff%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'run_tot.asc'))
-        if (sim%prt_yr_net_flux_gw=='y') a_yr_map%net_flux_gw%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'net_flux_gw.asc'))
-        if (sim%prt_yr_total_eff=='y') a_yr_map%total_eff%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eff_tot.asc'))
-        if (sim%prt_yr_n_irr_events=='y') a_yr_map%n_irr_events%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'irr_nr.asc'))
-        if (sim%prt_yr_h_irr_mean=='y') a_yr_map%h_irr_mean%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'irr_mean.asc'))
+        a_yr_map%rain%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'prec_tot.asc'))
+        a_yr_map%rain_crop_season%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'prec_agr.asc'))
+        a_yr_map%irr%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'irr_tot.asc'))
+        a_yr_map%irr_loss%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'irr_loss.asc'))
+        a_yr_map%eva_act_crop_season%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eva_act_agr.asc'))
+        a_yr_map%eva_pot_crop_season%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eva_pot_agr.asc'))
+        a_yr_map%transp_act%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'trasp_act_tot.asc'))
+        a_yr_map%transp_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'trasp_pot_tot.asc'))
+        a_yr_map%runoff%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'run_tot.asc'))
+        a_yr_map%net_flux_gw%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'net_flux_gw.asc'))
+        a_yr_map%total_eff%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eff_tot.asc'))
+        a_yr_map%n_irr_events%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'irr_nr.asc'))
+        a_yr_map%h_irr_mean%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'irr_mean.asc'))
         a_yr_map = 0.0D0    ! init to zero
     end subroutine init_yearly_output_file!
     !
-    subroutine init_yield_output_file(yield,path,year,sim)
+    subroutine init_yield_output_file(yield,path,year)
         character(len=*),intent(in)::path!
         character(len=*),intent(in)::year
-        type(yield_t),intent(inout)::yield!
+        type(yield_t),intent(out)::yield!
         character(len=33)::year_str
-        type(simulation)::sim
         !!
         year_str=trim(adjustl(year))//'_'!
-        if (sim%prt_yr_biomass_pot=='y') yield%biomass_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'biomass_pot'))
-        if (sim%prt_yr_yield_pot=='y') yield%yield_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'yield_pot'))
-        if (sim%prt_yr_yield_act=='y') yield%yield_act%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'yield_act'))
-        if (sim%prt_yr_T_act_sum=='y') yield%T_act_sum%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'T_act_sum'))
-        if (sim%prt_yr_T_pot_sum=='y') yield%T_pot_sum%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'T_pot_sum'))
-        if (sim%prt_yr_f_WS_stage=='y') yield%f_WS_stage%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'fcCS'))
-        if (sim%prt_yr_f_WS=='y') yield%f_WS%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'fcT'))
-        if (sim%prt_yr_f_HS=='y') yield%f_HS%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'fHS'))
-        if (sim%prt_yr_f_HS_sum=='y') yield%f_HS_sum%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'fHS_sum'))
+        yield%biomass_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'biomass_pot'))
+        yield%yield_pot%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'yield_pot'))
+        yield%yield_act%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'yield_act'))
+        yield%T_act_sum%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'T_act_sum'))
+        yield%T_pot_sum%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'T_pot_sum'))
+        yield%f_WS_stage%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'fcCS'))
+        yield%f_WS%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'fcT'))
+        yield%f_HS%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'fHS'))
+        yield%f_HS_sum%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'fHS_sum'))
         yield = 0.0D0    ! set to zero after
     end subroutine init_yield_output_file!
     !
-    subroutine init_debug_yearly_output_file(a_yr_dbg_map,path,year,sim)
+    subroutine init_debug_yearly_output_file(a_yr_dbg_map,path,year)
         character(len=*),intent(in)::path!
         character(len=*),intent(in)::year
-        type(annual_debug_map),intent(inout)::a_yr_dbg_map!
+        type(annual_debug_map),intent(out)::a_yr_dbg_map!
         character(len=33)::year_str
-        type(simulation)::sim
         
         year_str=trim(adjustl(year))//'_'!
-        if (sim%prt_yr_dbg_eva_act_tot=='y') a_yr_dbg_map%eva_act_tot%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eva_tot.asc'))
-        if (sim%prt_yr_dbg_rain_eff=='y') a_yr_dbg_map%rain_eff%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eff_prec_tot.asc'))
-        if (sim%prt_yr_dbg_iter1=='y') a_yr_dbg_map%iter1%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'iter1.asc'))
-        if (sim%prt_yr_dbg_iter2=='y') a_yr_dbg_map%iter2%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'iter2.asc'))
+        a_yr_dbg_map%eva_act_tot%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eva_tot.asc'))
+        a_yr_dbg_map%rain_eff%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'eff_prec_tot.asc'))
+        a_yr_dbg_map%iter1%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'iter1.asc'))
+        a_yr_dbg_map%iter2%fn=trim(adjustl(trim(path)//trim(adjustl(year_str))//'iter2.asc'))
         a_yr_dbg_map = 0.0D0    ! set to zero
     end subroutine init_debug_yearly_output_file!
     !
     subroutine save_step_data(a_step_map,doy,domain,calendar, init_total)
         ! save the results aggregated by step if the current day (doy) is the last day of the step
-        type(step_map),intent(inout)::a_step_map!
+        type(step_map),intent(in)::a_step_map!
         integer,intent(in)::doy!
         type(grid_i),intent(in)::domain!
         integer,dimension(:),intent(in)::calendar!
@@ -987,17 +971,29 @@ module cli_save_outputs!
                     a_step_map%et_act%mat=real(domain%header%nan)
                 end where!
                 call print_mat_as_grid(trim(a_step_map%rain%fn),domain%header,a_step_map%rain%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%rain%fn))!
                 call print_mat_as_grid(trim(a_step_map%transp_act%fn),domain%header,a_step_map%transp_act%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%transp_act%fn))!
                 call print_mat_as_grid(trim(a_step_map%transp_pot%fn),domain%header,a_step_map%transp_pot%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%transp_pot%fn))!
                 call print_mat_as_grid(trim(a_step_map%irr%fn),domain%header,a_step_map%irr%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%irr%fn))!
                 call print_mat_as_grid(trim(a_step_map%irr_loss%fn),domain%header,a_step_map%irr_loss%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%irr_loss%fn))!
                 call print_mat_as_grid(trim(a_step_map%cap_rise%fn),domain%header,a_step_map%cap_rise%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%cap_rise%fn))!
                 call print_mat_as_grid(trim(a_step_map%irr_nm_priv%fn),domain%header,a_step_map%irr_nm_priv%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%irr_nm_priv%fn))!
                 call print_mat_as_grid(trim(a_step_map%irr_nm_col%fn),domain%header,a_step_map%irr_nm_col%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%irr_nm_col%fn))!
                 call print_mat_as_grid(trim(a_step_map%deep_perc%fn),domain%header,a_step_map%deep_perc%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%deep_perc%fn))!
                 call print_mat_as_grid(trim(a_step_map%runoff%fn),domain%header,a_step_map%runoff%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%runoff%fn))!
                 call print_mat_as_grid(trim(a_step_map%et_pot%fn),domain%header,a_step_map%et_pot%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%et_pot%fn))!
                 call print_mat_as_grid(trim(a_step_map%et_act%fn),domain%header,a_step_map%et_act%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%et_act%fn))!
                 exit!
             else!
                 cycle!
@@ -1008,7 +1004,7 @@ module cli_save_outputs!
     subroutine save_step_irrigation(a_step_map,doy,domain,calendar, init_total)
         ! save only irrigation map
         implicit none!
-        type(step_map),intent(inout)::a_step_map!
+        type(step_map),intent(in)::a_step_map!
         integer,intent(in)::doy!
         type(grid_i),intent(in)::domain!
         integer,dimension(:),intent(in)::calendar!
@@ -1026,6 +1022,7 @@ module cli_save_outputs!
                     a_step_map%irr%mat=real(domain%header%nan)!
                 end where!
                 call print_mat_as_grid(trim(a_step_map%irr%fn),domain%header,a_step_map%irr%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_step_map%irr%fn))!
             else!
                 cycle!
             end if!
@@ -1034,7 +1031,7 @@ module cli_save_outputs!
     !
     subroutine save_debug_step_data(a_debug_asc,doy,domain,calendar, total_init)
         ! save the results for debug aggregated by step if the current day (doy) is the last day of the step
-        type(step_debug_map),intent(inout)::a_debug_asc!
+        type(step_debug_map),intent(in)::a_debug_asc!
         integer,intent(in)::doy!
         type(grid_i),intent(in)::domain!
         integer,dimension(:),intent(in)::calendar!
@@ -1057,11 +1054,17 @@ module cli_save_outputs!
                     a_debug_asc%h_soil2%mat=REAL(domain%header%nan)
                 end where
                 call print_mat_as_grid(trim(a_debug_asc%eva_act%fn),domain%header,a_debug_asc%eva_act%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_debug_asc%eva_act%fn))!
                 call print_mat_as_grid(trim(a_debug_asc%eff_rain%fn),domain%header,a_debug_asc%eff_rain%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_debug_asc%eff_rain%fn))!
                 call print_mat_as_grid(trim(a_debug_asc%perc1%fn),domain%header,a_debug_asc%perc1%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_debug_asc%perc1%fn))!
                 call print_mat_as_grid(trim(a_debug_asc%perc2%fn),domain%header,a_debug_asc%perc2%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_debug_asc%perc2%fn))!
                 call print_mat_as_grid(trim(a_debug_asc%h_soil1%fn),domain%header,a_debug_asc%h_soil1%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_debug_asc%h_soil1%fn))!
                 call print_mat_as_grid(trim(a_debug_asc%h_soil2%fn),domain%header,a_debug_asc%h_soil2%mat,errorflag)!
+                print*,"print file: ", trim(trim(a_debug_asc%h_soil2%fn))!
                 exit!
             else!
                 cycle!
@@ -1069,11 +1072,12 @@ module cli_save_outputs!
         end do!
     end subroutine save_debug_step_data!
     !
-    subroutine save_yearly_data(yr_map,domain)!
+    subroutine save_yearly_data(yr_map,domain,debug)!
         ! save annual outputs (water balance variable and efficiency)
         implicit none!
         type(annual_map),intent(in)::yr_map!
         type(grid_i),intent(in)::domain!
+        logical,intent(in)::debug
         !!
         integer::errorflag!
         !!
@@ -1095,19 +1099,34 @@ module cli_save_outputs!
         end where!
         !
         call print_mat_as_grid(trim(yr_map%rain%fn),domain%header,yr_map%rain%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%rain%fn))!
         call print_mat_as_grid(trim(yr_map%irr%fn),domain%header,yr_map%irr%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%irr%fn))!
         call print_mat_as_grid(trim(yr_map%irr_loss%fn),domain%header,yr_map%irr_loss%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%irr_loss%fn))!
         call print_mat_as_grid(trim(yr_map%eva_act_crop_season%fn),domain%header,yr_map%eva_act_crop_season%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%eva_act_crop_season%fn))!
         call print_mat_as_grid(trim(yr_map%eva_pot_crop_season%fn),domain%header,yr_map%eva_pot_crop_season%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%eva_pot_crop_season%fn))!
         call print_mat_as_grid(trim(yr_map%transp_act%fn),domain%header,yr_map%transp_act%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%transp_act%fn))!
         call print_mat_as_grid(trim(yr_map%transp_pot%fn),domain%header,yr_map%transp_pot%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%transp_pot%fn))!
         call print_mat_as_grid(trim(yr_map%runoff%fn),domain%header,yr_map%runoff%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%runoff%fn))!
         call print_mat_as_grid(trim(yr_map%net_flux_gw%fn),domain%header,yr_map%net_flux_gw%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%net_flux_gw%fn))!
         call print_mat_as_grid(trim(yr_map%total_eff%fn),domain%header,yr_map%total_eff%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%total_eff%fn))!
         call print_mat_as_grid(trim(yr_map%n_irr_events%fn),domain%header,yr_map%n_irr_events%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_map%n_irr_events%fn))!
         call print_mat_as_grid(trim(yr_map%h_irr_mean%fn),domain%header,yr_map%h_irr_mean%mat,errorflag)!
-        call print_mat_as_grid(trim(yr_map%rain_crop_season%fn),domain%header,yr_map%rain_crop_season%mat,errorflag)!
-        
+        print*,"print file: ", trim(trim(yr_map%h_irr_mean%fn))!
+        !
+        if (debug .eqv. .true.) then
+            call print_mat_as_grid(trim(yr_map%rain_crop_season%fn),domain%header,yr_map%rain_crop_season%mat,errorflag)!
+            print*,"print file: ", trim(trim(yr_map%rain_crop_season%fn))!
+        end if
     end subroutine save_yearly_data!
     !
     subroutine save_yield_data(yield,domain)!
@@ -1132,18 +1151,15 @@ module cli_save_outputs!
         
         do j=1, size(yield%yield_pot%mat,3)
             write(strj,*)j
-            if (yield%yield_pot%fn/='') then
-                call print_mat_as_grid(trim(trim(yield%yield_pot%fn)//"_"//trim(adjustl(strj))//".asc"), &
-                    & domain%header,yield%yield_pot%mat(:,:,j),errorflag)!
-            end if
-            if (yield%yield_act%fn/='') then
-                call print_mat_as_grid(trim(trim(yield%yield_act%fn)//"_"//trim(adjustl(strj))//".asc"), &
-                    & domain%header,yield%yield_act%mat(:,:,j),errorflag)!
-            end if
-            if (yield%biomass_pot%fn/='') then
-                call print_mat_as_grid(trim(trim(yield%biomass_pot%fn)//"_"//trim(adjustl(strj))//".asc"), &
-                    & domain%header,yield%biomass_pot%mat(:,:,j),errorflag)!
-            end if
+            call print_mat_as_grid(trim(trim(yield%yield_pot%fn)//"_"//trim(adjustl(strj))//".asc"), &
+                & domain%header,yield%yield_pot%mat(:,:,j),errorflag)!
+            print*,"print file: ", (trim(trim(yield%yield_pot%fn)//"_"//trim(adjustl(strj))//".asc"))!
+            call print_mat_as_grid(trim(trim(yield%yield_act%fn)//"_"//trim(adjustl(strj))//".asc"), &
+                & domain%header,yield%yield_act%mat(:,:,j),errorflag)!
+            print*,"print file: ", (trim(trim(yield%yield_act%fn)//"_"//trim(adjustl(strj))//".asc"))!
+            call print_mat_as_grid(trim(trim(yield%biomass_pot%fn)//"_"//trim(adjustl(strj))//".asc"), &
+                & domain%header,yield%biomass_pot%mat(:,:,j),errorflag)!
+            print*,"print file: ", (trim(trim(yield%biomass_pot%fn))//"_"//trim(adjustl(strj))//".asc")!
         end do
     end subroutine save_yield_data!
     !
@@ -1158,7 +1174,7 @@ module cli_save_outputs!
             yr_map%irr%mat=real(domain%header%nan)!
         end where!
         call print_mat_as_grid(trim(yr_map%irr%fn),domain%header,yr_map%irr%mat,errorflag)!
-        
+        print*,"print file: ", trim(trim(yr_map%irr%fn))!
     end subroutine save_annual_irrigation_data!    
     !
     subroutine save_annual_debug_data(yr_dbg_map, domain)!
@@ -1174,10 +1190,13 @@ module cli_save_outputs!
             yr_dbg_map%iter2%mat=domain%header%nan
         end where!
         call print_mat_as_grid(trim(yr_dbg_map%eva_act_tot%fn),domain%header,yr_dbg_map%eva_act_tot%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_dbg_map%eva_act_tot%fn))!
         call print_mat_as_grid(trim(yr_dbg_map%rain_eff%fn),domain%header,yr_dbg_map%rain_eff%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_dbg_map%rain_eff%fn))!
         call print_mat_as_grid(trim(yr_dbg_map%iter1%fn),domain%header,yr_dbg_map%iter1%mat,errorflag)!
+        print*,"print file: ", trim(trim(yr_dbg_map%iter1%fn))!
         call print_mat_as_grid(trim(yr_dbg_map%iter2%fn),domain%header,yr_dbg_map%iter2%mat,errorflag)!
-        
+        print*,"print file: ", trim(trim(yr_dbg_map%iter2%fn))!
     end subroutine save_annual_debug_data!
     !
     subroutine save_yield_debug_data(yield,domain)!
@@ -1194,37 +1213,32 @@ module cli_save_outputs!
             write(stri,*)i
             do j=1, size(yield%T_act_sum%mat,4)
                 write(strj,*)j
-                if (yield%T_act_sum%fn/='') then
-                    call print_mat_as_grid &
-                        & (trim(trim(yield%T_act_sum%fn)//"_"//trim(adjustl(stri))//"_"//trim(adjustl(strj))//".asc"), &
-                        & domain%header,yield%T_act_sum%mat(:,:,i,j),errorflag)!
-                end if
-                if (yield%T_pot_sum%fn/='') then
-                    call print_mat_as_grid &
-                        & (trim(trim(yield%T_pot_sum%fn)//"_"//trim(adjustl(stri))//"_"//trim(adjustl(strj))//".asc"), &
-                        & domain%header,yield%T_pot_sum%mat(:,:,i,j),errorflag)!
-                end if
+                call print_mat_as_grid &
+                    & (trim(trim(yield%T_act_sum%fn)//"_"//trim(adjustl(stri))//"_"//trim(adjustl(strj))//".asc"), &
+                    & domain%header,yield%T_act_sum%mat(:,:,i,j),errorflag)!
+                print*,"print file: ", trim(trim(yield%T_act_sum%fn)//"_"//trim(adjustl(stri))//"_"//trim(adjustl(strj))//".asc")!
+                call print_mat_as_grid &
+                    & (trim(trim(yield%T_pot_sum%fn)//"_"//trim(adjustl(stri))//"_"//trim(adjustl(strj))//".asc"), &
+                    & domain%header,yield%T_pot_sum%mat(:,:,i,j),errorflag)!
+                print*,"print file: ", trim(trim(yield%T_pot_sum%fn)//"_"//trim(adjustl(stri))//"_"//trim(adjustl(strj))//".asc")!
             end do
         end do
         do i=1, size(yield%f_WS%mat,3)
             write(stri,*)i
-            if (yield%f_WS%fn/='') then
-                call print_mat_as_grid(trim(trim(yield%f_WS%fn)//"_"//trim(adjustl(stri))//".asc"), &
-                    & domain%header,yield%f_WS%mat(:,:,i),errorflag)!
-            end if
-            if (yield%f_WS_stage%fn/='') then
-                call print_mat_as_grid(trim(trim(yield%f_WS_stage%fn)//"_"//trim(adjustl(stri))//".asc"), &
-                    & domain%header,yield%f_WS_stage%mat(:,:,i),errorflag)!
-            end if
-            if (yield%f_HS%fn/='') then
-                call print_mat_as_grid(trim(trim(yield%f_HS%fn)//"_"//trim(adjustl(stri))//".asc"), &
-                    & domain%header,yield%f_HS%mat(:,:,i),errorflag)!
-            end if
+            call print_mat_as_grid(trim(trim(yield%f_WS%fn)//"_"//trim(adjustl(stri))//".asc"), &
+                & domain%header,yield%f_WS%mat(:,:,i),errorflag)!
+            print*,"print file: ", (trim(trim(yield%f_WS%fn)//"_"//trim(adjustl(stri))//".asc"))!
+            call print_mat_as_grid(trim(trim(yield%f_WS_stage%fn)//"_"//trim(adjustl(stri))//".asc"), &
+                & domain%header,yield%f_WS_stage%mat(:,:,i),errorflag)!
+            print*,"print file: ", (trim(trim(yield%f_WS_stage%fn)//"_"//trim(adjustl(stri))//".asc"))!
+            call print_mat_as_grid(trim(trim(yield%f_HS%fn)//"_"//trim(adjustl(stri))//".asc"), &
+                & domain%header,yield%f_HS%mat(:,:,i),errorflag)!
+            print*,"print file: ", (trim(trim(yield%f_HS%fn))//"_"//trim(adjustl(stri))//".asc")!
         end do
     end subroutine save_yield_debug_data!
     !
     subroutine assign_step_map(a_step_map,a)!
-        type(step_map),intent(inout)::a_step_map!
+        type(step_map),intent(out)::a_step_map!
         real(dp),intent(in)::a!
         
         a_step_map%runoff%mat = a!
@@ -1243,7 +1257,7 @@ module cli_save_outputs!
     end subroutine assign_step_map!
     !
     subroutine assign_step_debug_map(a_debug_map,a)!
-        type(step_debug_map),intent(inout)::a_debug_map!
+        type(step_debug_map),intent(out)::a_debug_map!
         real(dp),intent(in)::a!
         !!
         a_debug_map%eva_act%mat = a!
@@ -1255,7 +1269,7 @@ module cli_save_outputs!
     end subroutine assign_step_debug_map!
     !
     subroutine assign_annual_map(yr_map,a)!
-        type(annual_map),intent(inout)::yr_map!
+        type(annual_map),intent(out)::yr_map!
         real(dp),intent(in)::a!
         !!
         yr_map%rain%mat = a!
@@ -1274,7 +1288,7 @@ module cli_save_outputs!
     end subroutine assign_annual_map!
     !
     subroutine assign_yield_map(yield_map,a)!
-        type(yield_t),intent(inout)::yield_map!
+        type(yield_t),intent(out)::yield_map!
         real(dp),intent(in)::a!
         !!
         yield_map%biomass_pot%mat = a!
@@ -1291,7 +1305,7 @@ module cli_save_outputs!
     end subroutine assign_yield_map!
     !
     subroutine assign_annual_debug_map(yr_debug_map,a)!
-        type(annual_debug_map),intent(inout)::yr_debug_map!
+        type(annual_debug_map),intent(out)::yr_debug_map!
         real(dp),intent(in)::a!
         !!
         yr_debug_map%eva_act_tot%mat = a!

@@ -55,11 +55,10 @@ module mod_crop_soil_water
         
         ! Potential capillary flux (Eq. 7)
         h_cap_pot = (a4*(1+depth_under_rz)**b4)/24.
-        if (transp_pot>0) then
-            h_cap_pot = min(transp_pot, h_cap_pot) ! TODO: check --> apply only to crop
-            ! if(1+depth_under_rz <= dwc)  gmax = max(transp_pot,gmax)
-            if (1 + depth_under_rz <= dwc)  h_cap_pot = transp_pot
-        end if
+        h_cap_pot = min(transp_pot, h_cap_pot) ! TODO: check
+        ! if(1+depth_under_rz <= dwc)  gmax = max(transp_pot,gmax)
+        if (1 + depth_under_rz <= dwc)  h_cap_pot = transp_pot
+        
         
         cap_rise = h_cap_pot
         
