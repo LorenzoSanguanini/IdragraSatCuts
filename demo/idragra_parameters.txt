@@ -4,15 +4,6 @@
 # 
 ########################################################
 
-### 0. Printing ###
-prt_all = n
-prt_stp_irr = y
-prt_stp_deep_perc = y #flux2
-prt_stp_et_act = y
-prt_stp_et_pot = y
-prt_stp_transp_act = y
-prt_stp_transp_pot = y
-
 ### 1. General section ###
 
 # 1.1. Input and output folders and files

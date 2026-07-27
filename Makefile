@@ -1,45 +1,43 @@
-# version string for the header: use an exact tag when present, otherwise the commit string
-VERSION := $(shell git describe --tags --exact-match HEAD 2>/dev/null || git rev-parse --short HEAD)
+# commit code/number for versioning
+COMMIT := $(shell git rev-parse --short HEAD)
 CURRENTDATE := $(shell date --iso=seconds)
-LOG_FILE := $(shell git log --format=reference > ./release/git_idragra.log)
 
 # Windows OS variables & settings
 DEL = rm
-CP = cp
 EXE = .exe
 WIN = 1
 
 # Compiler settings
 # -cpp: activates compiler pre processing
-# -DGIT_VERSION: sets the macro GIT_VERSION in the code (actually used only in cli_main.f90)
+# -DGIT_VERSION: sets the macro GIT_VERSION in the code (actually used only in main.f90)
 # -g: enables debug with breakpoints 
-
-MINGW64_BINDIR ?= /mingw64/bin
-export PATH := $(MINGW64_BINDIR):$(PATH)
 
 CC = gfortran
 CPP = gfortran -cpp
-IS_RELEASE := true
-
 # -g for gdb, -O0 zero optimization or -Og
+#
+# BUILD switch (SATCUTS):
+#   make                -> release build (fast, use this for real simulations)
+#   make BUILD=debug    -> debug build (bounds checking + backtrace, 10-50x slower)
+# Remember to run "make cleanall" when switching between the two.
+BUILD ?= release
+
+ifeq ($(BUILD),debug)
 ### for debug ###
-TYPE := debug
-GFFLAGS = -cpp -DGIT_VERSION=\"$(VERSION)\" -DCOMP_DATE=\"$(CURRENTDATE)\" -DWIN=$(WIN) -g -Wall -Wconversion -fimplicit-none -fbacktrace -ffree-line-length-0 -fcheck=all,no-array-temps -ffpe-trap=zero,overflow,underflow -finit-real=nan -c 
-# nnnooo  GFFLAGS = -cpp -DGIT_VERSION=\"$(VERSION)\" -DCOMP_DATE=\"$(CURRENTDATE)\" -DWIN=$(WIN) -g -Wall  -Wconversion -fimplicit-none -fbacktrace -ffree-line-length-0 -fcheck=all -ffpe-trap=denorm -funsafe-math-optimizations -finit-real=nan -c 
-#GFFLAGS = -g -O0 -Wall -Wextra -Wshadow -pedantic -static -c
-#GFFLAGS =  -cpp -DMY_VERSION=\"$(VERSION)\" -g -Wall -c
-
-ifeq ($(IS_RELEASE),true)
-   ### for release ###
-   # -ffree-line-length-512 manage long commands in the code
-   TYPE := release
-   GFFLAGS = -cpp -DGIT_VERSION=\"$(VERSION)\" -DCOMP_DATE=\"$(CURRENTDATE)\" -DWIN=$(WIN) -ffast-math  -O3 -ffree-line-length-0 -c
+GFFLAGS = -cpp -DGIT_VERSION=\"$(COMMIT)\" -DCOMP_DATE=\"$(CURRENTDATE)\" -DWIN=$(WIN) -g -Wall  -Wconversion -fimplicit-none -fbacktrace -ffree-line-length-0 -fcheck=all -ffpe-trap=zero,overflow,underflow -finit-real=nan -c
+else
+### for release ###
+GFFLAGS = -cpp -DGIT_VERSION=\"$(COMMIT)\" -DCOMP_DATE=\"$(CURRENTDATE)\" -DWIN=$(WIN) -ffast-math  -O3 -ffree-line-length-0 -c
 endif
-
+# nnnooo  GFFLAGS = -cpp -DGIT_VERSION=\"$(COMMIT)\" -DCOMP_DATE=\"$(CURRENTDATE)\" -DWIN=$(WIN) -g -Wall  -Wconversion -fimplicit-none -fbacktrace -ffree-line-length-0 -fcheck=all -ffpe-trap=denorm -funsafe-math-optimizations -finit-real=nan -c
+#GFFLAGS = -g -O0 -Wall -Wextra -Wshadow -pedantic -static -c
+#GFFLAGS =  -cpp -DMY_VERSION=\"$(COMMIT)\" -g -Wall -c
+### for release ###
+# -ffree-line-length-512 manage long commands in the code
+#GFFLAGS = -cpp -DGIT_VERSION=\"$(COMMIT)\" -DCOMP_DATE=\"$(CURRENTDATE)\" -DWIN=$(WIN) -ffast-math  -O3 -ffree-line-length-0 -c
 LDFLAGS = 
 
-APPNAME = idragra_$(VERSION)_$(TYPE)
-APPALIAS = idragra_latest
+APPNAME = idragra
 EXT = .f90
 SRCDIR = src
 OBJDIR = obj
@@ -75,7 +73,6 @@ $(APPNAME): $(patsubst %, $(OBJDIR)/%.o, $(FILES))
 	$(DEL) -f /$(OBJDIR)/cli_main.o
 	$(CC) -o $(OBJDIR)/cli_main.o -J$(OBJDIR) $(GFFLAGS) $(SRCDIR)/cli_main.f90
 	$(CPP) -g -o $(RELDIR)/$@$(EXE) $^ $(OBJDIR)/cli_main.o $(LDFLAGS) -static
-	$(CP) $(RELDIR)/$@$(EXE) $(RELDIR)/$(APPALIAS)$(EXE)
 
 # The following sets a function that creates makefile rules
 # Additionally:
@@ -105,3 +102,4 @@ cleanall:
 cleanmain:
 	@echo "hello from cleanmain"
 	$(DEL) -f /$(OBJDIR)/main.o
+	
