@@ -225,10 +225,16 @@ module mod_crop_phenology
         ! dormancy are the real ones and the crop does not stay green until December.
         integer,dimension(:,:),allocatable,intent(out)::season_end
         integer::n_ws, n_crop, n_days, i, c, d, d_start, d_end, cut1, cut2
-        real(dp)::peak, base, thr, tol
+        real(dp)::peak, base, thr, tol, mature
 
         n_ws   = size(info_pheno)
-        n_days = size(info_pheno(1)%k_cb%tab,1)
+        ! La tabella pheno prodotta da cropcoef contiene tutti gli anni della
+        ! simulazione uno dopo l'altro (es. 1096 righe per 2012-2014), ma il
+        ! puntatore fenologico viene sempre limitato a year_length: le righe oltre
+        ! il primo anno non vengono mai lette. Cercare qui la stagione su tutta la
+        ! tabella darebbe un season_end di ~1000 e renderebbe inutile il controllo
+        ! di fine stagione. Si guarda quindi solo il primo anno.
+        n_days = min(size(info_pheno(1)%k_cb%tab,1), 366)
         n_crop = size(info_pheno(1)%k_cb%tab,2)
         allocate(regrow_start(n_ws,n_crop))
         allocate(regrow_end(n_ws,n_crop))
@@ -269,10 +275,22 @@ module mod_crop_phenology
                 thr = 0.2d0 * (peak - base)
                 if (thr <= tol) cycle             ! flat curve: no cut to replay
 
+                ! ---- a cut always starts from a MATURE canopy ----
+                ! Requiring the drop to begin above half way between the post-cut level
+                ! and the seasonal peak rules out the drops that are not cuts: the short
+                ! zero block cropcoef writes at the beginning of the series, and the
+                ! senescence steps. Without this test, when HarvestDate_max is 366 (so
+                ! that Kcb never returns to zero in winter) the scan starts on 1 January
+                ! and takes that initial artefact as the first cut: the replayed
+                ! "regrowth" is then a flat line at the post-cut level and the crop
+                ! never grows again after a forced cut.
+                mature = base + 0.5d0 * (peak - base)
+
                 cut1 = 0
                 cut2 = 0
                 do d=d_start+1,d_end
-                    if (info_pheno(i)%k_cb%tab(d-1,c) - info_pheno(i)%k_cb%tab(d,c) > thr) then
+                    if (info_pheno(i)%k_cb%tab(d-1,c) - info_pheno(i)%k_cb%tab(d,c) > thr &
+                        & .and. info_pheno(i)%k_cb%tab(d-1,c) > mature) then
                         if (cut1 == 0) then
                             cut1 = d
                         else
@@ -327,6 +345,7 @@ module mod_crop_phenology
         integer::doy_std ! standard (not re-anchored) pointer, kept for the end of season
         logical::use_forced_cuts
         integer::rs, re, se
+        integer::d_end_season, overshoot
 
         use_forced_cuts = present(fc_last_cut) .and. present(fc_regrow_start) &
             & .and. present(fc_regrow_end) .and. present(fc_season_end) .and. present(fc_first_cut)
@@ -389,7 +408,38 @@ module mod_crop_phenology
                         re = fc_regrow_end(ws_idx(i,j), soil_use%mat(i,j))
                         se = fc_season_end(ws_idx(i,j), soil_use%mat(i,j))
                         doy_std = doy_s                     ! standard pointer, kept as reference
-                        if (rs > 0 .and. re >= rs .and. doy_std <= se) then
+                        if (rs > 0 .and. re >= rs .and. doy_std > se .and. fc_last_cut(i,j) > 0) then
+                            ! (c) STAGIONE DI RIFERIMENTO FINITA, ma la cella ha ricevuto
+                            ! tagli da satellite. La curva di cropcoef qui vale zero, perche'
+                            ! HarvestDate_max chiude la stagione: seguirla farebbe crollare
+                            ! l'ET a picco, cosa che le misure non mostrano. La coltura viene
+                            ! invece tenuta nello stato POST-TAGLIO (rs), cioe' canopy bassa
+                            ! ma viva: Kcb, LAI, altezza e profondita' radicale restano quelli
+                            ! del giorno del taglio nella serie di riferimento, e l'ET scende
+                            ! da sola perche' scende ET0. Le celle senza tagli imposti non
+                            ! passano di qui e mantengono il comportamento originale.
+                            ! Il rientro non e' istantaneo: circa il 10% delle celle ha
+                            ! l'ultimo taglio prima del giorno 230 e a fine stagione si trova
+                            ! ancora sul plateau, quindi un salto secco allo stato post-taglio
+                            ! sarebbe l'ennesimo gradino verticale. Il puntatore ripercorre
+                            ! invece all'indietro la finestra di ricrescita, un giorno al giorno:
+                            ! la canopy cala seguendo esattamente la forma con cui era cresciuta,
+                            ! i salti giornalieri sono quelli della rampa di crescita (che il
+                            ! modello gia' accetta) e il raccordo con l'ultimo giorno di stagione
+                            ! e' continuo. Arrivata allo stato post-taglio la coltura ci resta.
+                            ! overshoot: di quanto il puntatore standard ha superato la fine
+                            ! della stagione di riferimento. Si misura sul puntatore, non sul
+                            ! calendario, perche' i due non avanzano alla stessa velocita'
+                            ! (dij contrae o dilata il ciclo). Cosi' il raccordo con l'ultimo
+                            ! giorno di stagione e' esatto qualunque sia dij.
+                            overshoot = doy_std - se
+                            d_end_season = rs + ((doy - overshoot) - fc_last_cut(i,j))
+                            if (d_end_season > re) d_end_season = re
+                            if (d_end_season < rs) d_end_season = rs
+                            doy_s = d_end_season - overshoot
+                            if (doy_s < rs) doy_s = rs
+                            if (doy_s > re) doy_s = re
+                        else if (rs > 0 .and. re >= rs .and. doy_std <= se) then
                             if (fc_last_cut(i,j) > 0) then
                                 ! (a) after an imposed cut: replay the reference regrowth from it
                                 doy_s = rs + (doy - fc_last_cut(i,j))
