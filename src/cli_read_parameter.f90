@@ -330,6 +330,8 @@ module cli_read_parameter!
                             end if
                         case ('forecast_day') ! Number days to consider for cumulative precipitation
                             read(buffer, *, iostat=ios)xml%sim%forecast_day
+                        case ('irr_halt_days') ! days of irrigation halt before/after every cut (0 = off)
+                            read(buffer, *, iostat=ios)xml%sim%irr_halt_days
                         ! parameter for percolation booster
                         case ('01q_eva')  ! 10° percentile of the first layer
                             read(buffer, *, iostat=ios)xml%sim%quantiles(1,1)

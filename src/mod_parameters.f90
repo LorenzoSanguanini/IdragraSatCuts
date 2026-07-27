@@ -104,6 +104,13 @@ module mod_parameters!
         type(date) :: end_simulation                ! end simulation date
         integer :: forecast_day = 5                 ! number of days to use to cumulate precipitation
         real(dp) :: h_maxpond = 0.0D0               ! overall maximum pond (mm). It will replaced by irrigation method
+        ! IRRIGATION HALT AROUND CUTS.
+        ! Number of days before and after every harvest during which irrigation is
+        ! suspended, so that the field is dry enough for the machinery. It is applied
+        ! to ALL cells of a crop that has cuts, no matter whether the cut dates come
+        ! from an external file (satellite) or from the GDD calendar of cropcoef.
+        ! 0 disables the mechanism and restores the original behaviour.
+        integer :: irr_halt_days = 0
     end type simulation!
 
     type layer_depth!

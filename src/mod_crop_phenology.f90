@@ -209,7 +209,8 @@ module mod_crop_phenology
 
     end subroutine populate_crop_yield_matrices
 
-    subroutine compute_regrow_window(info_pheno, regrow_start, regrow_end, season_end)
+    subroutine compute_regrow_window(info_pheno, regrow_start, regrow_end, season_end, &
+                                     & cut_days, n_cut)
         ! FORCED CUTS support.
         ! For every (weather station, crop) pair, locate in the REFERENCE phenological
         ! series one complete regrowth cycle, i.e. the interval that goes from a cut
@@ -224,6 +225,14 @@ module mod_crop_phenology
         ! cell must go back to the ORIGINAL curve, so that autumn senescence and winter
         ! dormancy are the real ones and the crop does not stay green until December.
         integer,dimension(:,:),allocatable,intent(out)::season_end
+        ! IRRIGATION HALT: every cut found in the reference series, not just the first two.
+        ! cut_days(ws, crop, 1:n_cut(ws,crop)) are the days of the reference table on which
+        ! the crop is harvested. They are needed to suspend irrigation around the cuts of the
+        ! cells that follow the standard GDD calendar, exactly as it is done for the cells
+        ! whose cut dates are imposed from outside.
+        integer,dimension(:,:,:),allocatable,intent(out),optional::cut_days
+        integer,dimension(:,:),allocatable,intent(out),optional::n_cut
+        integer,parameter::MAX_CUTS = 12
         integer::n_ws, n_crop, n_days, i, c, d, d_start, d_end, cut1, cut2
         real(dp)::peak, base, thr, tol, mature
 
@@ -242,6 +251,14 @@ module mod_crop_phenology
         regrow_start = 0
         regrow_end   = 0
         season_end   = 0
+        if (present(cut_days)) then
+            allocate(cut_days(n_ws,n_crop,MAX_CUTS))
+            cut_days = 0
+        end if
+        if (present(n_cut)) then
+            allocate(n_cut(n_ws,n_crop))
+            n_cut = 0
+        end if
         tol = 1.0d-6
 
         do i=1,n_ws
@@ -286,6 +303,9 @@ module mod_crop_phenology
                 ! never grows again after a forced cut.
                 mature = base + 0.5d0 * (peak - base)
 
+                ! The scan does NOT stop at the second cut any more: regrow_start/end still
+                ! describe the FIRST regrowth cycle (that is all the re-anchoring needs), but
+                ! every cut is recorded, because the irrigation halt has to know all of them.
                 cut1 = 0
                 cut2 = 0
                 do d=d_start+1,d_end
@@ -293,9 +313,16 @@ module mod_crop_phenology
                         & .and. info_pheno(i)%k_cb%tab(d-1,c) > mature) then
                         if (cut1 == 0) then
                             cut1 = d
-                        else
+                        else if (cut2 == 0) then
                             cut2 = d
-                            exit
+                        end if
+                        if (present(cut_days) .and. present(n_cut)) then
+                            if (n_cut(i,c) < MAX_CUTS) then
+                                n_cut(i,c) = n_cut(i,c) + 1
+                                cut_days(i,c,n_cut(i,c)) = d
+                            end if
+                        else
+                            if (cut2 > 0) exit    ! nothing else to collect
                         end if
                     end if
                 end do
@@ -312,10 +339,33 @@ module mod_crop_phenology
 
     end subroutine compute_regrow_window
 
+    subroutine halt_from_table(ws, crop, doy_s, halt_days, cut_days, n_cut, halted)
+        ! IRRIGATION HALT for the cells that follow the standard GDD calendar: the cut
+        ! happens when the phenological pointer crosses one of the cuts of the reference
+        ! table, so the window is measured on the pointer.
+        implicit none
+        integer,intent(in)::ws, crop, doy_s, halt_days
+        integer,dimension(:,:,:),intent(in)::cut_days
+        integer,dimension(:,:),intent(in)::n_cut
+        logical,intent(out)::halted
+        integer::q
+
+        halted = .false.
+        if (ws < 1 .or. ws > size(n_cut,1)) return
+        if (crop < 1 .or. crop > size(n_cut,2)) return
+        do q=1,n_cut(ws,crop)
+            if (abs(doy_s - cut_days(ws,crop,q)) <= halt_days) then
+                halted = .true.
+                return
+            end if
+        end do
+    end subroutine halt_from_table
+
     subroutine populate_crop_pars_matrices(crop_pars_mat,info_pheno,irandom,doy,ws_idx,&
                                            & domain,soil_use,y, year_length, crop_mat, &
                                            & fc_last_cut, fc_regrow_start, fc_regrow_end, fc_season_end, &
-                                           & fc_first_cut)!
+                                           & fc_first_cut, &
+                                           & halt_days, cut_days, n_cut, fc_next_cut, irr_halt_mask)!
         ! populate crop parameters matrices from weather stations time series
         integer,intent(in)::doy,year_length,y!
         type(grid_i),intent(in)::domain,soil_use!
@@ -339,6 +389,18 @@ module mod_crop_phenology
         ! fc_first_cut(i,j): doy of the FIRST imposed cut of the year for that cell (0 = none).
         ! Needed to prevent the GDD calendar from firing its own cut before the satellite one.
         integer,dimension(:,:),intent(in),optional::fc_first_cut
+        ! ---- IRRIGATION HALT AROUND THE CUTS (optional) ----
+        ! halt_days(crop): days before and after every cut without irrigation (0 = off).
+        !                 Per crop, not global: the scan finds cuts on pasture too, and
+        !                 whether pasture must stop irrigating is an agronomic decision.
+        ! cut_days/n_cut: cuts found in the reference series, per (weather station, crop)
+        ! fc_next_cut   : doy of the NEXT imposed cut for that cell (0 = none left this year)
+        ! irr_halt_mask : output, .true. on the cells that must not be irrigated today
+        integer,dimension(:),intent(in),optional::halt_days
+        integer,dimension(:,:,:),intent(in),optional::cut_days
+        integer,dimension(:,:),intent(in),optional::n_cut
+        integer,dimension(:,:),intent(in),optional::fc_next_cut
+        logical,dimension(:,:),intent(out),optional::irr_halt_mask
 
         integer::i,j
         integer::doy_s ! shifted day of the year
@@ -346,9 +408,23 @@ module mod_crop_phenology
         logical::use_forced_cuts
         integer::rs, re, se
         integer::d_end_season, overshoot
+        logical::use_halt
+        integer::hw, hc, hd
 
         use_forced_cuts = present(fc_last_cut) .and. present(fc_regrow_start) &
             & .and. present(fc_regrow_end) .and. present(fc_season_end) .and. present(fc_first_cut)
+
+        use_halt = present(halt_days) .and. present(cut_days) .and. present(n_cut) &
+            & .and. present(irr_halt_mask)
+        if (use_halt) then
+            if (maxval(halt_days) <= 0) use_halt = .false.
+        end if
+        ! a cell with imposed cuts is recognised through fc_first_cut, so the forced-cut
+        ! arrays must be there as well when they are needed
+        if (use_halt .and. use_forced_cuts) then
+            if (.not. present(fc_next_cut)) use_halt = .false.
+        end if
+        if (present(irr_halt_mask)) irr_halt_mask = .false.
 
         do j=1,size(domain%mat,2)!
             do i=1,size(domain%mat,1)!
@@ -454,6 +530,56 @@ module mod_crop_phenology
                                 ! of the reference curve. Without this the GDD calendar would fire
                                 ! a spurious cut of its own before the satellite one.
                                 if (rs > 1 .and. doy_s > rs - 1) doy_s = rs - 1
+                            end if
+                        end if
+                    end if
+
+                    ! ---- IRRIGATION HALT AROUND THE CUTS --------------------------------
+                    ! The field must be dry enough for the machinery, so irrigation is
+                    ! suspended for halt_days before and after every harvest. The rule has
+                    ! to be the SAME whatever the origin of the cut dates: two neighbouring
+                    ! alfalfa fields cannot receive a different amount of water only because
+                    ! the satellite detector reached its 2-cut threshold on one of them.
+                    !
+                    ! The two regimes need two different yardsticks:
+                    !
+                    !  - cells with IMPOSED cuts are measured on the CALENDAR, against their
+                    !    own dates. The pointer cannot be used here: while the cell waits for
+                    !    the next imposed cut the pointer is deliberately frozen one day
+                    !    short of the cut of the reference table, so a pointer-based test
+                    !    would keep firing for weeks.
+                    !
+                    !  - cells on the GDD calendar are measured on the POINTER, against the
+                    !    cuts of the reference table. Their pointer is never frozen, so the
+                    !    window is meaningful. It is exact when dij = 1 and slightly
+                    !    contracted or dilated otherwise, like the rest of the cycle.
+                    if (use_halt) then
+                        irr_halt_mask(i,j) = .false.
+                        hw = ws_idx(i,j)
+                        hc = soil_use%mat(i,j)
+                        hd = 0
+                        if (hc >= 1 .and. hc <= size(halt_days)) hd = halt_days(hc)
+                        if (hd > 0) then
+                            if (use_forced_cuts) then
+                                if (fc_first_cut(i,j) > 0) then     ! cell with imposed cuts
+                                    if (fc_last_cut(i,j) > 0) then
+                                        if (doy - fc_last_cut(i,j) <= hd) &
+                                            & irr_halt_mask(i,j) = .true.
+                                    end if
+                                    if (fc_next_cut(i,j) > 0) then
+                                        if (fc_next_cut(i,j) - doy <= hd) &
+                                            & irr_halt_mask(i,j) = .true.
+                                    end if
+                                end if
+                            end if
+                            if (.not. irr_halt_mask(i,j)) then
+                                if (.not. use_forced_cuts) then
+                                    call halt_from_table(hw, hc, doy_s, hd, &
+                                        & cut_days, n_cut, irr_halt_mask(i,j))
+                                else if (fc_first_cut(i,j) == 0) then
+                                    call halt_from_table(hw, hc, doy_s, hd, &
+                                        & cut_days, n_cut, irr_halt_mask(i,j))
+                                end if
                             end if
                         end if
                     end if

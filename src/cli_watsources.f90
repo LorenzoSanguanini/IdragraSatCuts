@@ -417,6 +417,61 @@ module cli_watsources
         end if
 
     end subroutine open_forced_cuts!
+
+    subroutine open_irr_halt_days(file_name, halt_by_crop, default_halt, debug)!
+        ! IRRIGATION HALT AROUND THE CUTS, per crop.
+        ! Optional file with one line per crop:  crop_id <tab> days
+        ! A single global value is not enough: the scan of the reference series finds cuts
+        ! on every crop whose Kcb drops sharply, pasture included, and pasture covers half
+        ! of the domain. Which crops must stop irrigating around the harvest is an
+        ! agronomic decision, so it is left explicit.
+        ! If the file is missing, default_halt is applied to every crop, which reproduces
+        ! the behaviour of a single global parameter.
+        implicit none
+        character(len=*), intent(in) :: file_name!
+        integer, intent(in) :: default_halt
+        logical, intent(IN):: debug
+        integer,dimension(:),allocatable,intent(inout)::halt_by_crop!
+        integer :: error_flag, i, n_rec, free_unit, ios, crop_id, days
+        logical :: f_exists
+
+        error_flag = 0
+        ios = 0
+        halt_by_crop = default_halt
+
+        inquire(file=trim(file_name), exist=f_exists)
+        if (f_exists .eqv. .false.) then
+            if (debug) print *, 'No irrigation halt file found (optional): ', trim(file_name)
+            return
+        end if
+
+        call seek_un( error_flag, free_unit)
+        open( unit=free_unit, file=trim(file_name), status='old', action="read", iostat=ios )
+        if (ios /= 0 ) then
+            print *, "Cannot open file ", trim(file_name), ". Execution will be aborted..."
+            stop
+        end if
+
+        read( free_unit, *, iostat=ios) n_rec
+        read( free_unit, *, iostat=ios)                 ! skip header
+        ! a file that lists the crops replaces the global value: the crops that are not
+        ! listed do not stop irrigating
+        halt_by_crop = 0
+        do i=1,n_rec
+            read(free_unit,*,iostat=ios) crop_id, days
+            if (ios /= 0) exit
+            if (crop_id >= 1 .and. crop_id <= size(halt_by_crop)) halt_by_crop(crop_id) = days
+        end do
+        close(free_unit)
+
+        if (debug) then
+            print *,'===== DEBUG: irrigation halt days by crop ====='
+            do i=1,size(halt_by_crop)
+                if (halt_by_crop(i) > 0) print *, '  crop ', i, ' -> +/-', halt_by_crop(i), ' days'
+            end do
+        end if
+    end subroutine open_irr_halt_days!
+
     subroutine read_water_sources_table(wat_sour_tbl_fn, wat_sour_tbl, error_flag)!
         ! Read the list of water sources for each irrigation units.
         ! Each sources have an id, a type and the release ratio 

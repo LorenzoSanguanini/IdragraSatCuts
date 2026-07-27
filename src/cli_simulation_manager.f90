@@ -112,6 +112,14 @@ module cli_simulation_manager!
         integer,dimension(:,:),allocatable::fc_regrow_end
         integer,dimension(:,:),allocatable::fc_season_end             ! last day of growth in the reference series
         logical::use_forced_cuts
+        ! ---- IRRIGATION HALT AROUND THE CUTS ----
+        ! Applied to every cell of a crop that has cuts, whatever the origin of the dates.
+        integer,dimension(:,:),allocatable::fc_next_cut               ! doy of the NEXT imposed cut per cell (0 = none left)
+        integer,dimension(:,:,:),allocatable::pheno_cut_days          ! cuts of the reference series per (station, crop)
+        integer,dimension(:,:),allocatable::pheno_n_cut
+        logical,dimension(:,:),allocatable::irr_halt_mask             ! .true. where irrigation is suspended today
+        integer,dimension(:),allocatable::halt_by_crop                ! days of halt per crop (0 = crop not stopped)
+        logical::use_irr_halt
         type(crop_matrices)::crop_map
         !!
         integer:: unit_crop
@@ -307,9 +315,26 @@ module cli_simulation_manager!
         if (use_forced_cuts) then
             allocate(fc_last_cut(info_spat%domain%header%imax, info_spat%domain%header%jmax))
             allocate(fc_first_cut(info_spat%domain%header%imax, info_spat%domain%header%jmax))
+            allocate(fc_next_cut(info_spat%domain%header%imax, info_spat%domain%header%jmax))
             fc_last_cut = 0
             fc_first_cut = 0
+            fc_next_cut = 0
             print *, 'Forced cuts enabled: ', size(forced_cuts_list), ' records read.'
+        end if
+        !!
+        ! IRRIGATION HALT AROUND THE CUTS: suspend irrigation for irr_halt_days before and
+        ! after every harvest, on ALL the cells of a crop that has cuts. Before this, the
+        ! halt came from irrigation_blackout.txt, which the plugin fills starting from the
+        ! satellite cuts only: the cells left to the GDD calendar received no halt at all
+        ! and were irrigated more than their neighbours for a reason that has nothing to do
+        ! with agronomy. The file is still honoured, as an additional explicit override.
+        use_irr_halt = (pars%sim%irr_halt_days > 0)
+        ! allocated in any case so that it can always be passed: when irr_halt_days is 0 the
+        ! routine leaves it all .false. and nothing changes
+        allocate(irr_halt_mask(info_spat%domain%header%imax, info_spat%domain%header%jmax))
+        irr_halt_mask = .false.
+        if (use_irr_halt) then
+            print *, 'Irrigation halt around cuts: +/-', pars%sim%irr_halt_days, ' days.'
         end if
         !!
         ! Yearly simulation cycle
@@ -501,11 +526,30 @@ module cli_simulation_manager!
             call read_all_crop_pars(pars%sim%year_step(y),pars%sim%n_lus,info_pheno,pars)!
             ! FORCED CUTS: locate one regrowth cycle in the reference series (per station and crop)
             ! and clear the per-cell memory of the cuts of the previous year.
-            if (use_forced_cuts) then
+            ! the scan of the reference series is needed by the forced cuts (to replay the
+            ! regrowth) and by the irrigation halt (to know where the GDD cuts fall)
+            if (use_forced_cuts .or. use_irr_halt) then
                 if (allocated(fc_regrow_start)) deallocate(fc_regrow_start)
                 if (allocated(fc_regrow_end))   deallocate(fc_regrow_end)
                 if (allocated(fc_season_end))   deallocate(fc_season_end)
-                call compute_regrow_window(info_pheno, fc_regrow_start, fc_regrow_end, fc_season_end)
+                if (allocated(pheno_cut_days))  deallocate(pheno_cut_days)
+                if (allocated(pheno_n_cut))     deallocate(pheno_n_cut)
+                call compute_regrow_window(info_pheno, fc_regrow_start, fc_regrow_end, &
+                    & fc_season_end, pheno_cut_days, pheno_n_cut)
+            end if
+            ! placeholders, so that the arrays can be passed unconditionally
+            if (.not. allocated(pheno_cut_days)) allocate(pheno_cut_days(1,1,1))
+            if (.not. allocated(pheno_n_cut)) then
+                allocate(pheno_n_cut(1,1))
+                pheno_n_cut = 0
+            end if
+            ! days of halt per crop: irr_halt_days from idragra_parameters.txt is the value
+            ! used for every crop, irr_halt_days.txt (optional) overrides it crop by crop
+            if (allocated(halt_by_crop)) deallocate(halt_by_crop)
+            allocate(halt_by_crop(max(size(info_pheno(1)%k_cb%tab,2),1)))
+            call open_irr_halt_days(trim(pars%sim%input_path)//'irr_halt_days.txt', &
+                & halt_by_crop, pars%sim%irr_halt_days, debug)
+            if (use_forced_cuts) then
                 fc_last_cut = 0
                 ! first imposed cut of the current year, per cell: before that day the
                 ! phenological pointer must not reach the cut of the reference curve
@@ -737,6 +781,28 @@ module cli_simulation_manager!
                             end if
                         end if
                     end do
+                    ! IRRIGATION HALT: the halt starts BEFORE the cut, so each cell also has
+                    ! to know its next imposed date. Recomputed from scratch every day: the
+                    ! list is small and this way there is no state to keep in sync.
+                    if (use_irr_halt) then
+                        fc_next_cut = 0
+                        do k=1,size(forced_cuts_list)
+                            if (forced_cuts_list(k)%year == current_year .and. &
+                                & forced_cuts_list(k)%doy > doy) then
+                                if (forced_cuts_list(k)%row >= 1 .and. &
+                                    & forced_cuts_list(k)%row <= size(fc_next_cut,1) .and. &
+                                    & forced_cuts_list(k)%col >= 1 .and. &
+                                    & forced_cuts_list(k)%col <= size(fc_next_cut,2)) then
+                                    if (fc_next_cut(forced_cuts_list(k)%row, forced_cuts_list(k)%col) == 0 .or. &
+                                        & forced_cuts_list(k)%doy < &
+                                        & fc_next_cut(forced_cuts_list(k)%row, forced_cuts_list(k)%col)) then
+                                        fc_next_cut(forced_cuts_list(k)%row, forced_cuts_list(k)%col) = &
+                                            & forced_cuts_list(k)%doy
+                                    end if
+                                end if
+                            end if
+                        end do
+                    end if
                 end if
                 if (y==pars%sim%start_simulation%year - info_meteo(1)%start%year + 1 &
                     & .and. (pars%sim%start_simulation%day > 1 .or. pars%sim%start_simulation%month > 1)) then
@@ -744,22 +810,28 @@ module cli_simulation_manager!
                         call populate_crop_pars_matrices(pheno,info_pheno, info_spat%irandom%mat, &
                             & doy + pars%sim%start_simulation%doy - calc_doy(1, 1, pars%sim%start_simulation%year), &
                             & dir_phenofases,info_spat%domain,info_spat%soil_use_id, &
-                            & y, pars%sim%year_step(y), crop_map, fc_last_cut, fc_regrow_start, fc_regrow_end, fc_season_end, fc_first_cut)!
+                            & y, pars%sim%year_step(y), crop_map, fc_last_cut, fc_regrow_start, fc_regrow_end, fc_season_end, fc_first_cut, &
+                            & halt_by_crop, pheno_cut_days, pheno_n_cut, fc_next_cut, irr_halt_mask)!
                     else
                         call populate_crop_pars_matrices(pheno,info_pheno, info_spat%irandom%mat, &
                             & doy + pars%sim%start_simulation%doy - calc_doy(1, 1, pars%sim%start_simulation%year), &
                             & dir_phenofases,info_spat%domain,info_spat%soil_use_id, &
-                            & y, pars%sim%year_step(y), crop_map)!
+                            & y, pars%sim%year_step(y), crop_map, &
+                            & halt_days=halt_by_crop, cut_days=pheno_cut_days, &
+                            & n_cut=pheno_n_cut, irr_halt_mask=irr_halt_mask)!
                     end if
                 else
                     if (use_forced_cuts) then
                         call populate_crop_pars_matrices(pheno,info_pheno,info_spat%irandom%mat,doy,dir_phenofases, &
                         & info_spat%domain,info_spat%soil_use_id, &
-                        & y, pars%sim%year_step(y), crop_map, fc_last_cut, fc_regrow_start, fc_regrow_end, fc_season_end, fc_first_cut)!
+                        & y, pars%sim%year_step(y), crop_map, fc_last_cut, fc_regrow_start, fc_regrow_end, fc_season_end, fc_first_cut, &
+                        & halt_by_crop, pheno_cut_days, pheno_n_cut, fc_next_cut, irr_halt_mask)!
                     else
                         call populate_crop_pars_matrices(pheno,info_pheno,info_spat%irandom%mat,doy,dir_phenofases, &
                         & info_spat%domain,info_spat%soil_use_id, &
-                        & y, pars%sim%year_step(y), crop_map)!
+                        & y, pars%sim%year_step(y), crop_map, &
+                        & halt_days=halt_by_crop, cut_days=pheno_cut_days, &
+                        & n_cut=pheno_n_cut, irr_halt_mask=irr_halt_mask)!
                     end if
                 end if
                 
@@ -1003,6 +1075,16 @@ module cli_simulation_manager!
                             where(doy<info_spat%irr_starts%mat .or. doy>info_spat%irr_ends%mat) h_irr(:,:,z) = 0.
                             h_irr(:,:,z) = h_irr(:,:,z) * (1.0-irr_loss/100.0)
                         end do
+                        ! IRRIGATION HALT AROUND THE CUTS: same rule for every cell of a crop
+                        ! that has cuts, whether its dates come from the satellite or from the
+                        ! GDD calendar. Without this, only the cells listed in
+                        ! irrigation_blackout.txt were stopped, and those were by construction
+                        ! the satellite ones alone.
+                        if (use_irr_halt) then
+                            do z=1, pars%sim%n_irr_meth
+                                where (irr_halt_mask) h_irr(:,:,z) = 0.
+                            end do
+                        end if
                         ! zero irrigation on specific cells within specific date windows (opt-in via file)
                         do k=1,size(irr_black)
                             if (irr_black(k)%year==current_year .and. doy>=irr_black(k)%doy_start &
